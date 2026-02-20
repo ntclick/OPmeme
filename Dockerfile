@@ -34,4 +34,4 @@ EXPOSE 7860
 
 # Command to run the application using $PORT environment variable (default 7860)
 # Use shell form to expand variable
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 2
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}
