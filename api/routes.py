@@ -43,7 +43,7 @@ router = APIRouter()
 # Instantiate services
 twitter_scraper = TwitterScraper()
 solana_scraper = SolanaScraper()
-og_analyzer = OpenGradientAnalyzer()
+og_analyzer = None  # Lazy load
 
 CACHE_TTL_MINUTES = 15
 
@@ -105,6 +105,10 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
 
     Estimated time: 10–30 seconds (depends on Apify + OpenGradient)
     """
+    global og_analyzer
+    if og_analyzer is None:
+        og_analyzer = OpenGradientAnalyzer()
+        
     ticker = request.ticker.strip().strip("$#")
     contract_address = request.contract_address
     start_time = time.time()
