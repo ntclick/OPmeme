@@ -176,19 +176,25 @@ class OpenGradientAnalyzer:
             
             logger.info(f"Submitting Alpha Signal for {ticker}...")
             
-            # Using alpha.infer as per SDK examples
-            # Model CID: intfloat/multilingual-e5-large-instruct (from examples)
+            # Using alpha.infer with retry logic
             if hasattr(self._client, "alpha"):
-                result = self._client.alpha.infer(
-                    model_cid="intfloat/multilingual-e5-large-instruct",
-                    model_input={
-                        "queries": [query],
-                        "instruction": ["Verify the sentiment analysis"],
-                        "passages": [json.dumps(ai_result)]
-                    },
-                    inference_mode=og.InferenceMode.VANILLA
-                )
-                return result.transaction_hash
+                for attempt in range(1, 4):
+                    try:
+                        result = self._client.alpha.infer(
+                            model_cid="intfloat/multilingual-e5-large-instruct",
+                            model_input={
+                                "queries": [query],
+                                "instruction": ["Verify the sentiment analysis"],
+                                "passages": [json.dumps(ai_result)]
+                            },
+                            inference_mode=og.InferenceMode.VANILLA
+                        )
+                        if result.transaction_hash:
+                            return result.transaction_hash
+                    except Exception as try_err:
+                        logger.warning(f"Alpha Signal attempt {attempt} failed: {try_err}")
+                        continue
+                return None
             else:
                 logger.warning("SDK does not support alpha namespace")
                 return None

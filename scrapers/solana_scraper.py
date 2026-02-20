@@ -17,8 +17,20 @@ class SolanaScraper:
             self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
             self.helius_api = f"https://api.helius.xyz/v0"
         else:
-            self.rpc_url = SOLANA_RPC_URL or "https://api.mainnet-beta.solana.com"
+            self.rpc_urls = [
+                "https://api.mainnet-beta.solana.com",
+                "https://rpc.ankr.com/solana",
+                "https://solana-api.projectserum.com",
+            ]
+            self.current_rpc_index = 0
             self.helius_api = None
+
+    def _get_rpc_url(self):
+        """Rotate RPC URL on failure."""
+        url = self.rpc_urls[self.current_rpc_index]
+        self.current_rpc_index = (self.current_rpc_index + 1) % len(self.rpc_urls)
+        return url
+
 
     async def get_token_symbol(self, mint_address: str) -> Optional[str]:
         """Resolve token symbol via DexScreener API (Token or Pair)."""
@@ -77,9 +89,19 @@ class SolanaScraper:
                 ],
             }
 
-            try:
-                resp = await client.post(self.rpc_url, json=payload, timeout=10)
-                data = resp.json()
+            # Retry with rotation
+            for _ in range(3):
+                try:
+                    current_rpc = self._get_rpc_url()
+                    resp = await client.post(current_rpc, json=payload, timeout=10)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except Exception:
+                    continue
+            else:
+                 # Final attempt or fail
+                 return None
 
                 account_data = data.get("result", {}).get("value", {})
                 if not account_data:
@@ -132,9 +154,19 @@ class SolanaScraper:
                 "params": [mint_address],
             }
 
-            try:
-                resp = await client.post(self.rpc_url, json=payload, timeout=10)
-                data = resp.json()
+            # Retry with rotation
+            for _ in range(3):
+                try:
+                    current_rpc = self._get_rpc_url()
+                    resp = await client.post(current_rpc, json=payload, timeout=10)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except Exception:
+                    continue
+            else:
+                 # Final attempt or fail
+                 return None
 
                 accounts = data.get("result", {}).get("value", [])
                 if not accounts:
