@@ -103,28 +103,26 @@ class SolanaScraper:
                  # Final attempt or fail
                  return None
 
-                account_data = data.get("result", {}).get("value", {})
-                if not account_data:
-                    return None
-
-                parsed = (
-                    account_data
-                    .get("data", {})
-                    .get("parsed", {})
-                    .get("info", {})
-                )
-
-                return {
-                    "mint": mint_address,
-                    "supply": int(parsed.get("supply", 0)),
-                    "decimals": parsed.get("decimals", 9),
-                    "mint_authority": parsed.get("mintAuthority"),
-                    "freeze_authority": parsed.get("freezeAuthority"),
-                    "is_mint_renounced": parsed.get("mintAuthority") is None,
-                }
-            except Exception as e:
-                logger.error(f"Failed to get token info for {mint_address}: {e}")
+            account_data = data.get("result", {}).get("value", {})
+            if not account_data:
                 return None
+
+            parsed = (
+                account_data
+                .get("data", {})
+                .get("parsed", {})
+                .get("info", {})
+            )
+
+            return {
+                "mint": mint_address,
+                "supply": int(parsed.get("supply", 0)),
+                "decimals": parsed.get("decimals", 9),
+                "mint_authority": parsed.get("mintAuthority"),
+                "freeze_authority": parsed.get("freezeAuthority"),
+                "is_mint_renounced": parsed.get("mintAuthority") is None,
+            }
+
 
     async def get_top_holders(
         self, mint_address: str, top_n: int = 20
@@ -168,38 +166,36 @@ class SolanaScraper:
                  # Final attempt or fail
                  return None
 
-                accounts = data.get("result", {}).get("value", [])
-                if not accounts:
-                    return None
-
-                # Get total supply to calculate percentages
-                token_info = await self.get_token_info(mint_address)
-                total_supply = token_info["supply"] if token_info else 0
-
-                holders = []
-                for acc in accounts[:top_n]:
-                    amount = int(acc.get("amount", 0))
-                    pct = (amount / total_supply * 100) if total_supply > 0 else 0
-                    holders.append({
-                        "address": acc.get("address", ""),
-                        "amount": amount,
-                        "percentage": round(pct, 2),
-                    })
-
-                top10_pct = sum(h["percentage"] for h in holders[:10])
-                top20_pct = sum(h["percentage"] for h in holders[:20])
-
-                return {
-                    "total_holders": None,  # RPC doesn't provide this, needs Helius
-                    "top10_pct": round(top10_pct, 2),
-                    "top20_pct": round(top20_pct, 2),
-                    "largest_holder_pct": holders[0]["percentage"] if holders else 0,
-                    "holders": holders,
-                }
-
-            except Exception as e:
-                logger.error(f"Failed to get holders for {mint_address}: {e}")
+            accounts = data.get("result", {}).get("value", [])
+            if not accounts:
                 return None
+
+            # Get total supply to calculate percentages
+            token_info = await self.get_token_info(mint_address)
+            total_supply = token_info["supply"] if token_info else 0
+
+            holders = []
+            for acc in accounts[:top_n]:
+                amount = int(acc.get("amount", 0))
+                pct = (amount / total_supply * 100) if total_supply > 0 else 0
+                holders.append({
+                    "address": acc.get("address", ""),
+                    "amount": amount,
+                    "percentage": round(pct, 2),
+                })
+
+            top10_pct = sum(h["percentage"] for h in holders[:10])
+            top20_pct = sum(h["percentage"] for h in holders[:20])
+
+            return {
+                "total_holders": None,  # RPC doesn't provide this, needs Helius
+                "top10_pct": round(top10_pct, 2),
+                "top20_pct": round(top20_pct, 2),
+                "largest_holder_pct": holders[0]["percentage"] if holders else 0,
+                "holders": holders,
+            }
+
+
 
     async def check_lp_status(self, mint_address: str) -> dict:
         """
