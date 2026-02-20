@@ -164,6 +164,39 @@ class OpenGradientAnalyzer:
         except Exception as e:
             logger.warning(f"OpenGradient SDK not available (will use fallback): {e}")
 
+    def _submit_alpha_signal(self, ticker: str, ai_result: dict) -> Optional[str]:
+        """
+        Submit a lightweight inference task to the Alpha Testnet to verify the analysis on-chain.
+        Uses the 'intfloat/multilingual-e5-large-instruct' embedding model.
+        """
+        try:
+            # Construct a verification query based on the analysis
+            verdict = ai_result.get("verdict", "Analysis pending")
+            query = f"Verify analysis for ${ticker}: {verdict}"
+            
+            logger.info(f"Submitting Alpha Signal for {ticker}...")
+            
+            # Using alpha.infer as per SDK examples
+            # Model CID: intfloat/multilingual-e5-large-instruct (from examples)
+            if hasattr(self._client, "alpha"):
+                result = self._client.alpha.infer(
+                    model_cid="intfloat/multilingual-e5-large-instruct",
+                    model_input={
+                        "queries": [query],
+                        "instruction": ["Verify the sentiment analysis"],
+                        "passages": [json.dumps(ai_result)]
+                    },
+                    inference_mode=og.InferenceMode.VANILLA
+                )
+                return result.transaction_hash
+            else:
+                logger.warning("SDK does not support alpha namespace")
+                return None
+            
+        except Exception as e:
+            logger.warning(f"Alpha Signal submission failed: {e}")
+            return None
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def analyze_coin(
@@ -186,8 +219,15 @@ class OpenGradientAnalyzer:
             ticker, tweets_summary, on_chain_data, scoring_result, memsync_context
         )
 
-        # MemSync store disabled (API returning 422 errors)
-        
+        # Submit Alpha Signal (On-chain verification)
+        if self._initialized and result.get("used_opengradient"):
+            alpha_tx = self._submit_alpha_signal(ticker, result["ai_result"])
+            if alpha_tx:
+                # Prioritize Alpha TX for frontend verification
+                result["tx_hash"] = alpha_tx
+                result["transaction_hash"] = alpha_tx 
+                logger.info(f"✅ [ALPHA] Transaction Confirmed: {alpha_tx}")
+
         return result
 
     def _run_inference(
