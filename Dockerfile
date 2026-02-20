@@ -19,11 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright browsers (Chromium only to save space)
 RUN playwright install --with-deps chromium
 
-# Copy the rest of the application
-COPY . .
-
 # Create a non-root user (Hugging Face / Railway Good Practice)
 RUN useradd -m -u 1000 user
+
+# Copy the rest of the application with ownership
+COPY --chown=user:user . .
+
 USER user
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH
