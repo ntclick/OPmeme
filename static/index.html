@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CoinCheckGo - Scan Meme Coins, Detect Scams</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script>
+        // Keep Play CDN for this static MVP UI, but silence its production warning noise.
+        (function () {
+            const originalWarn = console.warn;
+            console.warn = function (...args) {
+                const first = args[0];
+                if (typeof first === 'string' && first.includes('cdn.tailwindcss.com should not be used in production')) {
+                    return;
+                }
+                return originalWarn.apply(console, args);
+            };
+        })();
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        /* Cyberpunk / Degen Glass Effect */
+        .glass-panel {
+            background: rgba(10, 10, 15, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .glass-panel:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 255, 163, 0.1);
+        }
+
+        .score-circle {
+            background: conic-gradient(var(--score-color) var(--score-pct), #1f2937 0deg);
+            transition: all 1s ease-out;
+        }
+
+        .animate-glow {
+            animation: pulse-glow 2s infinite;
+        }
+
+        @keyframes pulse-glow {
+
+            0%,
+            100% {
+                box-shadow: 0 0 10px var(--glow-color);
+            }
+
+            50% {
+                box-shadow: 0 0 25px var(--glow-color);
+            }
+        }
+
+        .fade-in-up {
+            animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Neon Text Utilities */
+        .text-neon-green {
+            color: #00FFA3;
+            text-shadow: 0 0 10px rgba(0, 255, 163, 0.5);
+        }
+
+        .text-neon-red {
+            color: #FF3B30;
+            text-shadow: 0 0 10px rgba(255, 59, 48, 0.5);
+        }
+
+        /* Background Grid */
+        .bg-grid {
+            background-size: 40px 40px;
+            background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#050505',
+                        card: '#0F0F12',
+                        primary: '#00FFA3', // Neon Green
+                        danger: '#FF3B30',
+                        warning: '#FFCC00',
+                        muted: '#6B7280'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+
+<body
+    class="bg-bg text-white min-h-screen flex flex-col items-center relative overflow-x-hidden selection:bg-primary/30 bg-grid">
+
+    <!-- Navbar -->
+    <nav class="w-full max-w-6xl p-6 flex justify-between items-center z-10">
+        <div class="flex items-center gap-3 cursor-pointer group" onclick="location.reload()">
+            <div class="relative">
+                <i data-lucide="scan-eye"
+                    class="text-primary w-8 h-8 relative z-10 group-hover:rotate-12 transition duration-300"></i>
+                <div
+                    class="absolute inset-0 bg-primary/40 blur-lg opacity-0 group-hover:opacity-100 transition duration-300">
+                </div>
+            </div>
+            <h1 class="text-2xl font-bold tracking-tight">CoinCheck<span class="text-primary">Go</span></h1>
+        </div>
+        <div class="hidden md:flex gap-8 text-sm font-medium text-gray-400 items-center">
+            <a href="#" class="hover:text-primary transition">Trending</a>
+            <a href="#" class="hover:text-primary transition">History</a>
+            <a href="#" class="hover:text-primary transition">Docs</a>
+            <button
+                class="bg-white/5 border border-white/10 px-5 py-2 rounded-lg hover:bg-white/10 hover:border-primary/50 text-white transition font-semibold">
+                Connect Wallet
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="w-full max-w-4xl flex-1 flex flex-col items-center px-4 mt-8 mb-20 z-10">
+
+        <!-- Hero Section -->
+        <div class="text-center mb-12 animate-fade-in-up">
+            <div
+                class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-bold mb-4">
+                <span class="relative flex h-2 w-2">
+                    <span
+                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                </span>
+                LIVE SCANNER ACTIVE
+            </div>
+            <h2 class="text-5xl md:text-7xl font-bold mb-4 tracking-tight">
+                Scan Meme Coins, <br />
+                <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-500">Detect
+                    Scams.</span>
+            </h2>
+            <p class="text-gray-400 max-w-xl mx-auto text-lg">
+                AI-powered audit for Solana tokens. Social sentiment & on-chain analysis verified by OpenGradient.
+            </p>
+        </div>
+
+        <!-- Search Box -->
+        <div
+            class="w-full glass-panel p-2 rounded-xl flex items-center gap-2 mb-12 relative group z-20 transition-all duration-300 focus-within:ring-2 focus-within:ring-primary/50 shadow-2xl">
+            <div class="relative w-full flex rounded-lg overflow-hidden bg-black/20">
+                <span class="pl-6 pr-2 py-5 text-gray-500 font-bold text-xl">$</span>
+                <input type="text" id="tickerInput" placeholder="Token name or contract address..."
+                    class="w-full bg-transparent text-xl font-bold outline-none placeholder-gray-700 text-white tracking-wide"
+                    onkeydown="if(event.key === 'Enter') analyzeCoin()">
+                <button onclick="analyzeCoin()" id="analyzeBtn"
+                    class="bg-primary text-black font-bold px-8 rounded-lg hover:bg-green-400 transition duration-300 flex items-center gap-2 m-1">
+                    <span>CHECK</span>
+                    <i data-lucide="arrow-right" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Trending Section (Dynamic) -->
+        <div class="w-full mb-16 animate-fade-in-up" style="animation-delay: 0.1s;">
+            <div class="flex items-center justify-between mb-4 px-1">
+                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                    <i data-lucide="flame" class="w-3 h-3 text-orange-500"></i> Trending
+                </h3>
+                <span class="text-[10px] text-gray-600">Updated 1m ago</span>
+            </div>
+            <div id="trendingGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <!-- Skeletons -->
+                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
+                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
+                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
+                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading" class="hidden flex-col items-center gap-8 py-12 w-full">
+            <div class="relative">
+                <div class="w-24 h-24 border-t-4 border-l-4 border-primary rounded-full animate-spin"></div>
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <i data-lucide="radar" class="w-8 h-8 text-primary animate-pulse"></i>
+                </div>
+            </div>
+            <div class="text-center space-y-3">
+                <h3 class="text-2xl font-bold text-white tracking-tight" id="loadingTitle">Scanning Network...</h3>
+                <div class="flex flex-col gap-2 text-sm text-gray-400 font-mono" id="loadingSteps">
+                    <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
+                        <i data-lucide="twitter" class="w-3.5 h-3.5"></i>
+                        <span>Checking on Twitter — $symbol & contract mentions</span>
+                    </div>
+                    <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
+                        <i data-lucide="link" class="w-3.5 h-3.5"></i>
+                        <span>Fetching on-chain data — holders, liquidity, transfers</span>
+                    </div>
+                    <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
+                        <i data-lucide="bot" class="w-3.5 h-3.5"></i>
+                        <span>Analyzing bot patterns & wash trading clusters</span>
+                    </div>
+                    <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
+                        <i data-lucide="brain" class="w-3.5 h-3.5"></i>
+                        <span>OpenGradient AI verifying — generating trust score on-chain</span>
+                    </div>
+                    <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+                        <span>Compiling final audit report</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ANALYSIS DASHBOARD (Result Section) -->
+        <div id="result" class="hidden w-full space-y-6 fade-in-up">
+
+            <!-- 1. TRUST SCORE HEADER -->
+            <div class="glass-panel rounded-2xl p-6 md:p-8 relative overflow-hidden group">
+                <div
+                    class="absolute top-0 right-0 w-96 h-96 bg-primary/5 rounded-full blur-[100px] pointer-events-none">
+                </div>
+
+                <div class="flex flex-col md:flex-row gap-8 md:gap-12 items-center">
+                    <!-- Gauge Chart -->
+                    <div class="relative w-48 h-48 flex-shrink-0">
+                        <div id="scoreCircle"
+                            class="w-full h-full rounded-full score-circle flex items-center justify-center shadow-[0_0_30px_rgba(0,0,0,0.5)]"
+                            style="--score-color: #00FFA3; --score-pct: 0%;">
+                            <div
+                                class="w-40 h-40 bg-[#0F0F12] rounded-full flex flex-col items-center justify-center border border-white/5">
+                                <span id="scoreValue" class="text-6xl font-bold text-white tracking-tighter">--</span>
+                                <span class="text-[10px] text-gray-500 uppercase tracking-widest mt-1">Trust
+                                    Score</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Verdict Info -->
+                    <div class="flex-1 text-center md:text-left space-y-4 relative z-10">
+                        <div class="space-y-1">
+                            <h2 id="coinTicker" class="text-4xl font-bold text-white tracking-tight">$TOKEN</h2>
+                            <div class="flex items-center justify-center md:justify-start gap-2">
+                                <span id="riskBadge"
+                                    class="px-3 py-1 rounded text-xs font-bold bg-gray-800 text-gray-300 border border-gray-700 uppercase tracking-wider">ANALYZING</span>
+                                <a id="dexLink" href="#" target="_blank"
+                                    class="text-xs text-gray-500 hover:text-white flex items-center gap-1 transition">
+                                    DexScreener <i data-lucide="external-link" class="w-3 h-3"></i>
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="bg-white/5 border-l-2 border-primary p-4 rounded-r-lg">
+                            <p id="verdictText" class="text-gray-200 text-lg font-medium leading-relaxed">"..."</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. SCORE DETAILS (Grid 2x2) -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <!-- Social -->
+                <div
+                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
+                    <div
+                        class="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400 mb-1">
+                        <i data-lucide="twitter" class="w-5 h-5"></i>
+                    </div>
+                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Social</div>
+                    <div class="text-2xl font-bold text-white" id="socialScore">--</div>
+                </div>
+                <!-- Bot -->
+                <div
+                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
+                    <div
+                        class="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-400 mb-1">
+                        <i data-lucide="bot" class="w-5 h-5"></i>
+                    </div>
+                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Bot Health</div>
+                    <div class="text-2xl font-bold text-white" id="botScore">--</div>
+                </div>
+                <!-- Holder -->
+                <div
+                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
+                    <div
+                        class="w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-400 mb-1">
+                        <i data-lucide="wallet" class="w-5 h-5"></i>
+                    </div>
+                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Holder</div>
+                    <div class="text-2xl font-bold text-white" id="holderScore">--</div>
+                </div>
+                <!-- Sentiment -->
+                <div
+                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
+                    <div
+                        class="w-10 h-10 rounded-full bg-pink-500/10 flex items-center justify-center text-pink-400 mb-1">
+                        <i data-lucide="heart-pulse" class="w-5 h-5"></i>
+                    </div>
+                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Sentiment</div>
+                    <div class="text-2xl font-bold text-white" id="sentimentScore">--</div>
+                </div>
+            </div>
+
+            <!-- 3. FLAGS (Columns) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Red Flags -->
+                <div class="glass-panel rounded-xl p-6 border-l-2 border-danger/50">
+                    <h3 class="text-danger font-bold mb-4 flex items-center gap-2 uppercase text-sm tracking-wider">
+                        <i data-lucide="x-circle" class="w-4 h-4"></i> Red Flags
+                    </h3>
+                    <ul id="redFlagsList" class="space-y-3 text-sm text-gray-400">
+                    </ul>
+                </div>
+
+                <!-- Green Flags -->
+                <div class="glass-panel rounded-xl p-6 border-l-2 border-primary/50">
+                    <h3 class="text-primary font-bold mb-4 flex items-center gap-2 uppercase text-sm tracking-wider">
+                        <i data-lucide="check-circle-2" class="w-4 h-4"></i> Green Flags
+                    </h3>
+                    <ul id="greenFlagsList" class="space-y-3 text-sm text-gray-400">
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 4. MARKET & ACTIONS -->
+            <div id="marketDataSection" class="hidden glass-panel p-6 rounded-2xl">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+                    <div>
+                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">Price</div>
+                        <div id="dexPrice" class="text-xl font-mono text-white">$0.00</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">Liquidity</div>
+                        <div id="dexLiquidity" class="text-xl font-mono text-gray-300">$0</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">24h Change</div>
+                        <div id="dex24h" class="text-xl font-mono font-bold">--%</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">Pair Age</div>
+                        <div id="dexAge" class="text-xl font-mono text-gray-300">--</div>
+                    </div>
+                </div>
+
+                <!-- Chart -->
+                <div id="dexChart"
+                    class="w-full h-[400px] rounded-lg overflow-hidden border border-white/10 bg-black/40 mb-6"></div>
+
+                <!-- Action Buttons -->
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <a id="btnBuy" href="#" target="_blank"
+                        class="bg-green-500/20 text-green-400 border border-green-500/50 hover:bg-green-500 hover:text-black font-bold py-3 rounded-lg text-center transition flex items-center justify-center gap-2">
+                        BUY
+                    </a>
+                    <a id="btnSell" href="#" target="_blank"
+                        class="bg-red-500/20 text-red-400 border border-red-500/50 hover:bg-red-500 hover:text-white font-bold py-3 rounded-lg text-center transition flex items-center justify-center gap-2">
+                        SELL
+                    </a>
+                    <a id="btnSwap" href="#" target="_blank"
+                        class="col-span-2 md:col-span-1 bg-white/10 text-white border border-white/20 hover:bg-white/20 font-bold py-3 rounded-lg text-center transition flex items-center justify-center gap-2">
+                        <i data-lucide="arrow-right-left" class="w-4 h-4"></i> SWAP (JUP)
+                    </a>
+                </div>
+            </div>
+
+            <!-- 5. AI VERIFICATION FOOTER -->
+            <div class="flex flex-col items-center justify-center py-6 gap-2 border-t border-white/5">
+                <div class="flex items-center gap-2 text-sm text-gray-500">
+                    <i data-lucide="shield-check" class="w-4 h-4 text-primary"></i>
+                    <span>Verified by OpenGradient</span>
+                </div>
+                <a id="verifyLink" href="#" target="_blank"
+                    class="hidden text-xs font-mono text-gray-600 hover:text-primary transition flex items-center gap-1 bg-black/30 px-3 py-1 rounded-full border border-white/5">
+                    TX: <span id="txHash">...</span> <i data-lucide="external-link" class="w-3 h-3"></i>
+                </a>
+            </div>
+
+            <!-- Demo Notice -->
+            <p id="demoNotice" class="hidden text-center text-xs text-warning/80 font-mono mt-2">
+                ⚠️ Backend unreachable. Showing DEMO data.
+            </p>
+
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="w-full text-center py-8 text-gray-600 text-xs border-t border-white/5">
+        <p>&copy; 2024 CoinCheckGo. Built for the OpenGradient Hackathon.</p>
+    </footer>
+
+    <!-- Scrip for Autosuggest -->
+    <script>
+        lucide.createIcons();
+        window.addEventListener('DOMContentLoaded', loadTrendingCoins);
+
+        // --- API BASE URL (auto-detect) ---
+        const API_BASE = window.location.origin;
+
+        // --- DEBOUNCE UTILITY ---
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        // --- AUTOCOMPLETE LOGIC ---
+        const input = document.getElementById('tickerInput');
+
+        // Create dropdown element dynamically
+        const dropdown = document.createElement('div');
+        dropdown.id = 'searchDropdown';
+        dropdown.className = 'hidden absolute top-full left-0 w-full bg-[#0F0F12] border border-white/10 rounded-lg mt-2 max-h-60 overflow-y-auto z-50 shadow-2xl';
+        input.parentElement.appendChild(dropdown);
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                dropdown.classList.add('hidden');
+            }
+        });
+
+        // Search handler
+        const handleSearch = async (e) => {
+            const query = e.target.value.trim();
+            if (query.length < 2) {
+                dropdown.classList.add('hidden');
+                return;
+            }
+
+            try {
+                // Determine if query is address or name
+                const isAddress = query.length > 30 && !query.includes(' ');
+                // Use local backend proxy to avoid client-side blocks/CORS
+                const searchUrl = `${API_BASE}/api/dex/search?q=${query}`;
+
+                const res = await fetch(searchUrl);
+                const data = await res.json();
+
+                if (!data.pairs || data.pairs.length === 0) {
+                    dropdown.classList.add('hidden');
+                    return;
+                }
+
+                // Filter for Solana pairs only and Deduplicate by base token
+                const uniqueTokens = new Map();
+                data.pairs.forEach(pair => {
+                    if (pair.chainId === 'solana') {
+                        const tokenAddress = pair.baseToken.address;
+                        if (!uniqueTokens.has(tokenAddress)) {
+                            uniqueTokens.set(tokenAddress, pair);
+                        }
+                    }
+                });
+
+                const results = Array.from(uniqueTokens.values()).slice(0, 8); // Show max 8
+
+                if (results.length === 0) {
+                    dropdown.classList.add('hidden');
+                    return;
+                }
+
+                // Render — show token name + full contract + price info
+                dropdown.innerHTML = results.map(pair => {
+                    const addr = pair.baseToken.address;
+                    const shortAddr = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+                    const price = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(6)}` : '';
+                    const change = pair.priceChange?.h24 ?? 0;
+                    const changeColor = change >= 0 ? 'text-green-400' : 'text-red-400';
+                    const changeText = `${change >= 0 ? '+' : ''}${change}%`;
+
+                    return `
+                    <div onclick="selectToken('${addr}', '${pair.baseToken.symbol}')" 
+                        class="p-3 hover:bg-white/5 cursor-pointer border-b border-white/5 last:border-0 transition-colors">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-blue-500/30 flex items-center justify-center text-xs font-bold text-white">
+                                    ${pair.baseToken.symbol.slice(0, 2)}
+                                </div>
+                                <div class="flex flex-col">
+                                    <span class="font-bold text-white text-sm">$${pair.baseToken.symbol}</span>
+                                    <span class="text-[10px] text-gray-400">${pair.baseToken.name}</span>
+                                </div>
+                            </div>
+                            <div class="text-right flex flex-col items-end">
+                                <span class="text-xs text-gray-300 font-mono">${price}</span>
+                                <span class="text-[10px] font-bold ${changeColor}">${changeText}</span>
+                            </div>
+                        </div>
+                        <div class="mt-1.5 flex items-center gap-1.5">
+                            <span class="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 font-bold">SOL</span>
+                            <span class="text-[10px] text-gray-500 font-mono select-all" title="${addr}">${shortAddr}</span>
+                            <button onclick="event.stopPropagation(); navigator.clipboard.writeText('${addr}')" 
+                                class="text-gray-600 hover:text-primary transition ml-auto" title="Copy contract">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                            </button>
+                        </div>
+                    </div>`;
+                }).join('');
+
+                dropdown.classList.remove('hidden');
+
+            } catch (err) {
+                console.error("Search failed:", err);
+            }
+        };
+
+        input.addEventListener('input', debounce(handleSearch, 300));
+
+        function selectToken(address, symbol) {
+            // When user selects, we fill the input with the ADDRESS (for precision)
+            // But the UI search will resolve it to the Symbol in the report
+            input.value = address;
+            dropdown.classList.add('hidden');
+            analyzeCoin(); // Auto-trigger analysis
+        }
+
+
+        // --- TRENDING LOGIC ---
+        async function loadTrendingCoins() {
+
+            const TOKENS = [
+                'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', // BONK
+                'EKpQGSJtjMFqKZ9KQanSqErQVvvHFknBh12Qy7xcPump', // WIF
+                '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr', // POPCAT
+                '2qEHjDLDLbuBgRYvsxhc5D6uDWAivNFZGan56P1tpump' // PNUT
+            ];
+
+            try {
+                // Use local backend proxy for tokens
+                const res = await fetch(`${API_BASE}/api/dex/tokens/${TOKENS.join(',')}`);
+                const json = await res.json();
+
+                if (!json.pairs) return;
+
+                const uniquePairs = [];
+                const seen = new Set();
+
+                for (const pair of json.pairs) {
+                    // Filter: Must be Solana chain. Relax quote token check to include USDC/USDT if SOL not found.
+                    if (pair.chainId === 'solana' && !seen.has(pair.baseToken.symbol)) {
+                        // Prefer SOL pairs, but accept others if it's the first time we see this token
+                        if (pair.quoteToken.symbol === 'SOL' || !uniquePairs.find(p => p.baseToken.symbol === pair.baseToken.symbol)) {
+                            seen.add(pair.baseToken.symbol);
+                            uniquePairs.push(pair);
+                        }
+                    }
+                }
+
+
+                const grid = document.getElementById('trendingGrid');
+                grid.innerHTML = uniquePairs.map(pair => `
+<div onclick="selectTrend('${pair.baseToken.symbol}')"
+    class="glass-panel p-3 rounded-lg cursor-pointer hover:bg-white/5 transition flex items-center justify-between group">
+    <div class="flex flex-col">
+        <span class="font-bold text-sm text-white group-hover:text-primary transition">$${pair.baseToken.symbol}</span>
+        <span class="text-[10px] text-gray-400">$${parseFloat(pair.priceUsd).toFixed(6)}</span>
+    </div>
+    <div
+        class="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-black/40 ${pair.priceChange.h24 >= 0 ? 'text-primary' : 'text-danger'}">
+        ${pair.priceChange.h24 >= 0 ? '+' : ''}${pair.priceChange.h24}%
+    </div>
+</div>
+`).join('');
+
+            } catch (e) {
+                console.error("Failed to load trending", e);
+            }
+        }
+
+        function selectTrend(ticker) {
+            document.getElementById('tickerInput').value = ticker;
+            analyzeCoin();
+        }
+
+        // --- CORE ANALYSIS LOGIC ---
+        async function analyzeCoin() {
+            const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
+            if (!ticker) return;
+
+            // UI State: Loading
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            const market = document.getElementById('marketDataSection');
+            const btn = document.getElementById('analyzeBtn');
+
+            loading.classList.remove('hidden');
+            loading.classList.add('flex');
+            result.classList.add('hidden');
+            market.classList.add('hidden');
+            btn.disabled = true;
+            btn.innerHTML = `<i data-lucide="loader" class="w-5 h-5 animate-spin"></i>`;
+            lucide.createIcons();
+
+            // Animate loading steps sequentially with descriptive titles
+            const steps = document.getElementById('loadingSteps').children;
+            const loadingTitle = document.getElementById('loadingTitle');
+            const stepTitles = [
+                'Checking Twitter...',
+                'Fetching On-chain Data...',
+                'Detecting Bot Patterns...',
+                'OpenGradient AI Analyzing...',
+                'Generating Audit Report...'
+            ];
+            for (let i = 0; i < steps.length; i++) {
+                setTimeout(() => {
+                    steps[i].style.opacity = '1';
+                    steps[i].classList.add('text-white');
+                    if (stepTitles[i]) loadingTitle.textContent = stepTitles[i];
+                }, 800 + i * 1500);
+            }
+
+            // Fetch DexScreener data in parallel
+            const dexPromise = fetchDexData(ticker);
+
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 180000); // 3min — Apify scraper is slow
+
+                const response = await fetch(`${API_BASE}/api/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker: ticker }),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) throw new Error("API Error");
+                const data = await response.json();
+
+                // Normalize backend response to frontend format
+                const normalized = {
+                    ticker: data.ticker,
+                    overall_score: data.overall_score,
+                    risk_level: data.risk_level,
+                    verdict: data.verdict,
+                    tx_hash: data.tx_hash,
+                    verify_url: data.verify_url,
+                    details: {
+                        social_score: data.scores?.social_score ?? 0,
+                        bot_score: data.scores?.bot_score ?? 0,
+                        holder_score: data.scores?.holder_score ?? 0,
+                        sentiment_score: data.scores?.sentiment_score ?? 0,
+                    },
+                    red_flags: data.red_flags || [],
+                    green_flags: data.green_flags || [],
+                };
+                renderResult(normalized, false);
+
+            } catch (error) {
+                console.warn("Using mock data due to:", error);
+                await new Promise(r => setTimeout(r, 2000)); // Fake delay
+                const mockData = generateMockData(ticker);
+                renderResult(mockData, true);
+            } finally {
+                // dexPromise runs in background (non-blocking)
+                loading.classList.add('hidden');
+                loading.classList.remove('flex');
+                btn.disabled = false;
+                btn.innerHTML = `<span>CHECK</span><i data-lucide="arrow-right" class="w-5 h-5"></i>`;
+                lucide.createIcons();
+
+                // Reset steps opacity and title
+                Array.from(steps).forEach(s => {
+                    s.style.opacity = '0.3';
+                    s.classList.remove('text-white');
+                });
+                loadingTitle.textContent = 'Scanning Network...';
+            }
+        }
+
+        async function fetchDexData(ticker) {
+            const maxRetries = 3;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 8000);
+                    // Use local backend proxy
+                    const res = await fetch(`${API_BASE}/api/dex/search?q=${ticker}`, {
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeout);
+                    const json = await res.json();
+                    if (!json.pairs || json.pairs.length === 0) return;
+
+                    let bestPair = json.pairs.find(p => p.chainId === 'solana') || json.pairs[0];
+                    renderDexData(bestPair);
+                    return; // Success, exit retry loop
+                } catch (e) {
+                    console.warn(`DexScreener attempt ${attempt}/${maxRetries} failed:`, e.message);
+                    if (attempt < maxRetries) {
+                        await new Promise(r => setTimeout(r, 1000 * attempt)); // Backoff
+                    } else {
+                        console.error("DexScreener fetch failed after all retries", e);
+                        // Show user-friendly message
+                        const section = document.getElementById('marketDataSection');
+                        if (section) {
+                            section.classList.remove('hidden');
+                            section.innerHTML = `<div class="text-center py-4 text-gray-400">
+                                <p>⚠️ Cannot load market data – check your internet connection</p>
+                            </div>`;
+                        }
+                    }
+                }
+            }
+        }
+
+        function renderDexData(pair) {
+            const section = document.getElementById('marketDataSection');
+            section.classList.remove('hidden');
+
+            // Data
+            const fmtNum = (val) => new Intl.NumberFormat('en-US', { notation: "compact" }).format(val);
+            document.getElementById('dexPrice').innerText = `$${pair.priceUsd || '0'}`;
+            document.getElementById('dexLiquidity').innerText = fmtNum(pair.liquidity?.usd || 0);
+
+            const change = pair.priceChange?.h24 || 0;
+            const changeEl = document.getElementById('dex24h');
+            changeEl.innerText = `${change}%`;
+            changeEl.className = `text-xl font-mono font-bold ${change >= 0 ? 'text-neon-green' : 'text-neon-red'}`;
+
+            // Age
+            const created = new Date(pair.pairCreatedAt);
+            const now = new Date();
+            const diffDays = Math.floor((now - created) / (86400000));
+            document.getElementById('dexAge').innerText = diffDays > 0 ? `${diffDays}d` : '<24h'; // Chart
+            document.getElementById('dexChart').innerHTML = ` <iframe
+    src="https://dexscreener.com/${pair.chainId}/${pair.pairAddress}?embed=1&theme=dark&trades=0&info=0" width="100%"
+    height="100%" style="border:0;"></iframe>`;
+
+            // Links
+            document.getElementById('dexLink').href = pair.url;
+            const addr = pair.baseToken.address;
+            document.getElementById('btnBuy').href = `https://jup.ag/swap/SOL-${addr}`;
+            document.getElementById('btnSell').href = `https://jup.ag/swap/${addr}-SOL`;
+            document.getElementById('btnSwap').href = `https://jup.ag/swap/SOL-${addr}`;
+        }
+
+        function generateMockData(ticker) {
+            const seed = ticker.length;
+            const score = (seed * 17) % 100;
+            return {
+                ticker: ticker,
+                overall_score: score,
+                risk_level: score < 40 ? "HIGH RISK" : "SAFE",
+                verdict: score > 50 ? "Community sentiment is bullish. On-chain metrics look clean." : "Warning: High bot activity and concentrated holders detected.",
+                tx_hash: "0xDEMO123...",
+                verify_url: "#",
+                details: {
+                    social_score: Math.min(100, score + 10),
+                    bot_score: Math.max(0, score - 15),
+                    holder_score: score,
+                    sentiment_score: Math.round((score + 10 + Math.max(0, score - 15)) / 2)
+                },
+                red_flags: score < 50 ? ["Mint Authority Active", "Top 10 hold 80%"] : [],
+                green_flags: score > 50 ? ["Liquidity Locked", "Active Community"] : []
+            };
+        }
+
+        function renderResult(data, isDemo = false) {
+            document.getElementById('result').classList.remove('hidden');
+            if (isDemo) document.getElementById('demoNotice').classList.remove('hidden');
+            else document.getElementById('demoNotice').classList.add('hidden');
+
+            // Header
+            document.getElementById('coinTicker').innerText = `$${data.ticker}`;
+            document.getElementById('verdictText').innerText = `"${data.verdict}"`;
+
+            // Score Gauge
+            const score = data.overall_score;
+            document.getElementById('scoreValue').innerText = score;
+            const scoreEl = document.getElementById('scoreCircle');
+            setTimeout(() => scoreEl.style.setProperty('--score-pct', `${score}%`), 100);
+
+            // Color Logic
+            let color = '#00FFA3'; // Green
+            if (score < 40) color = '#FF3B30'; // Red
+            else if (score < 70) color = '#FFCC00'; // Yellow
+
+            scoreEl.style.setProperty('--score-color', color);
+            document.getElementById('scoreValue').style.color = color;
+
+            // Badge
+            const badge = document.getElementById('riskBadge');
+            badge.innerText = data.risk_level;
+            badge.style.color = color;
+            badge.style.borderColor = color;
+
+            // Grid Scores
+            document.getElementById('socialScore').innerText = data.details.social_score;
+            document.getElementById('botScore').innerText = data.details.bot_score;
+            document.getElementById('holderScore').innerText = data.details.holder_score;
+            document.getElementById('sentimentScore').innerText = data.details.sentiment_score;
+
+            // Flags
+            const redList = document.getElementById('redFlagsList');
+            redList.innerHTML = (data.red_flags || []).length ?
+                (data.red_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="x" class="w-4 h-4 text-danger flex-shrink-0"></i> ${f}</li>`).join('') :
+                '<li class="text-gray-600 italic">No critical issues found</li>';
+
+            const greenList = document.getElementById('greenFlagsList');
+            greenList.innerHTML = (data.green_flags || []).length ?
+                (data.green_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-primary flex-shrink-0"></i> ${f}</li>`).join('') :
+                '<li class="text-gray-600 italic">No positive signals</li>';
+
+            // Verification
+            if (data.tx_hash) {
+                const link = document.getElementById('verifyLink');
+                link.classList.remove('hidden');
+                link.classList.add('inline-flex');
+                link.href = data.verify_url || '#';
+                document.getElementById('txHash').innerText = data.tx_hash.substring(0, 10) + '...';
+            }
+
+            lucide.createIcons();
+        }
+    </script>
+</body>
+
+</html>

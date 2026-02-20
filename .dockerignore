@@ -1,0 +1,14 @@
+# Exclude virtual environment
+venv
+.venv
+__pycache__
+*.pyc
+
+# Exclude local environment files (sensitive)
+.env
+
+# Exclude large storage/tmp files
+*.log
+tmp/
+.git/
+.vscode/

@@ -1,0 +1,115 @@
+# database/crud.py — CRUD operations for coins, tweets, reports
+
+from sqlalchemy.orm import Session
+from database.models import Coin, TweetRaw, AnalysisReport, HolderSnapshot
+from datetime import datetime
+from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def get_or_create_coin(
+    db: Session,
+    symbol: str,
+    contract_address: Optional[str] = None,
+) -> Coin:
+    """
+    Get existing coin by symbol/contract_address, or create a new one.
+    If contract_address is provided, prefer matching on that (it's unique).
+    """
+    coin = None
+
+    # Try by contract address first (more precise)
+    if contract_address:
+        coin = db.query(Coin).filter(Coin.contract_address == contract_address).first()
+
+    # Fallback to symbol
+    if not coin:
+        coin = db.query(Coin).filter(Coin.symbol == symbol.upper()).first()
+
+    # Create new
+    if not coin:
+        coin = Coin(
+            symbol=symbol.upper(),
+            contract_address=contract_address,
+        )
+        db.add(coin)
+        db.commit()
+        db.refresh(coin)
+        logger.info(f"Created new coin: {coin.symbol} (id={coin.id})")
+
+    return coin
+
+
+def save_tweets(db: Session, coin_id: int, tweets: list[dict]) -> int:
+    """
+    Save tweets to DB. Skips duplicates by tweet_id.
+    Returns: number of new tweets saved.
+    """
+    saved_count = 0
+
+    for t in tweets:
+        # Check duplicate
+        existing = db.query(TweetRaw).filter_by(tweet_id=t["tweet_id"]).first()
+        if existing:
+            continue
+
+        tweet_record = TweetRaw(
+            coin_id=coin_id,
+            tweet_id=t["tweet_id"],
+            author_username=t["author_username"],
+            author_name=t["author_name"],
+            author_followers=t["author_followers"],
+            author_verified=t["author_verified"],
+            full_text=t["full_text"],
+            retweet_count=t["retweet_count"],
+            like_count=t["like_count"],
+            reply_count=t["reply_count"],
+            quote_count=t["quote_count"],
+            is_retweet=t["is_retweet"],
+            is_quote=t["is_quote"],
+            language=t["language"],
+            tweet_created_at=None,
+        )
+        # Safe date parsing
+        try:
+            if t.get("tweet_created_at"):
+                tweet_record.tweet_created_at = datetime.fromisoformat(
+                    t["tweet_created_at"].replace("Z", "+00:00")
+                )
+        except ValueError:
+            logger.warning(f"Invalid date format in CRUD: {t['tweet_created_at']}")
+            tweet_record.tweet_created_at = datetime.utcnow()
+
+        db.add(tweet_record)
+        saved_count += 1
+
+    db.commit()
+    return saved_count
+
+
+def save_holder_snapshot(
+    db: Session,
+    coin_id: int,
+    report_id: Optional[int],
+    holder_data: dict,
+) -> HolderSnapshot:
+    """Save a holder snapshot linked to a coin and optionally a report."""
+    import json
+
+    snapshot = HolderSnapshot(
+        coin_id=coin_id,
+        report_id=report_id,
+        total_holders=holder_data.get("total_holders"),
+        top10_percentage=holder_data.get("top10_pct"),
+        top20_percentage=holder_data.get("top20_pct"),
+        dev_wallet_pct=holder_data.get("dev_wallet_pct"),
+        liquidity_locked=holder_data.get("liquidity_locked"),
+        lp_burn_percentage=holder_data.get("lp_burned_pct"),
+        snapshot_data=json.dumps(holder_data.get("holders", [])),
+    )
+    db.add(snapshot)
+    db.commit()
+    db.refresh(snapshot)
+    return snapshot

@@ -1,0 +1,17 @@
+# Python
+venv
+.venv
+__pycache__
+*.pyc
+
+# Environment variables
+.env
+
+# Logs and databases
+*.log
+*.sqlite
+tmp/
+
+# IDE settings
+.vscode/
+.idea/
