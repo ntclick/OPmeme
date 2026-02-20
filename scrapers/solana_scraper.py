@@ -12,18 +12,23 @@ class SolanaScraper:
     """Fetch on-chain data for Solana tokens."""
 
     def __init__(self):
-        # Prefer Helius if key is available, fallback to public RPC
+        self.rpc_urls = []
+        
+        # Prefer Helius if key is available
         if HELIUS_API_KEY:
-            self.rpc_url = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+            self.rpc_urls.append(f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}")
             self.helius_api = f"https://api.helius.xyz/v0"
         else:
-            self.rpc_urls = [
-                "https://api.mainnet-beta.solana.com",
-                "https://rpc.ankr.com/solana",
-                "https://solana-api.projectserum.com",
-            ]
-            self.current_rpc_index = 0
             self.helius_api = None
+
+        # Add public fallbacks
+        self.rpc_urls.extend([
+            "https://api.mainnet-beta.solana.com",
+            "https://rpc.ankr.com/solana",
+            "https://solana-api.projectserum.com",
+        ])
+        
+        self.current_rpc_index = 0
 
     def _get_rpc_url(self):
         """Rotate RPC URL on failure."""
