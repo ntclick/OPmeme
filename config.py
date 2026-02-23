@@ -15,7 +15,19 @@ else:
     load_dotenv()  # fallback to default search
 
 # Database
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./coincheckgo.db")
+default_db_path = _here / "coincheckgo.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{default_db_path}")
+
+# Ensure SQLite directory exists if using a file path
+if DATABASE_URL.startswith("sqlite:///"):
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if db_path and db_path != ":memory:":
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            try:
+                os.makedirs(db_dir, exist_ok=True)
+            except Exception:
+                pass
 
 # Apify (Twitter scraping)
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
