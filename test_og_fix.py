@@ -46,7 +46,7 @@ async def test_og_connection():
             print("\n3. Testing simple inference...")
             try:
                 result = analyzer._client.llm.chat(
-                    model=analyzer._og.TEE_LLM.CLAUDE_3_5_HAIKU,
+                    model=analyzer._og.TEE_LLM.GPT_4O,
                     messages=[{"role": "user", "content": "Say 'OpenGradient connected' if you receive this."}],
                     max_tokens=50,
                     temperature=0.0

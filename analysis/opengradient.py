@@ -14,9 +14,56 @@ import json
 import logging
 import os
 import socket
+import ssl
+import urllib3
 from pathlib import Path
 from typing import Optional, Any, List
 import uuid
+
+# --- DNS Monkeypatch for OpenGradient ---
+# Some ISPs block or fail to resolve OpenGradient domains.
+# We intercept DNS resolution at the socket level to return known good IPs.
+_orig_getaddrinfo = socket.getaddrinfo
+
+DNS_CACHE = {
+    'llm.opengradient.ai': '3.16.84.142',
+    'api.opengradient.ai': '3.150.250.90',
+    'rpc.opengradient.ai': '18.219.34.190',
+    'sdk-devnet.opengradient.ai': '3.15.81.173',
+    'ogevmdevnet.opengradient.ai': '3.148.53.198',
+}
+
+def _patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if host in DNS_CACHE:
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (DNS_CACHE[host], port))]
+    return _orig_getaddrinfo(host, port, family, type, proto, flags)
+
+socket.getaddrinfo = _patched_getaddrinfo
+
+# Disable SSL verification globally to allow IP-based connections without cert errors
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+
+# Patch httpx which OpenGradient uses internally
+try:
+    import httpx
+    orig_async_init = httpx.AsyncClient.__init__
+    def patched_async_init(self, *args, **kwargs):
+        kwargs['verify'] = False
+        orig_async_init(self, *args, **kwargs)
+    httpx.AsyncClient.__init__ = patched_async_init
+    
+    orig_sync_init = httpx.Client.__init__
+    def patched_sync_init(self, *args, **kwargs):
+        kwargs['verify'] = False
+        orig_sync_init(self, *args, **kwargs)
+    httpx.Client.__init__ = patched_sync_init
+except ImportError:
+    pass
+# ----------------------------------------
 
 import opengradient as og
 from langchain_core.tools import tool
@@ -309,26 +356,8 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
             
-            # PATCH: Use IP addresses directly to bypass DNS resolution failures
-            # Certificate verification will fail with IPs, so we need to handle that
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
-            # Globally disable SSL verification for IP usage (Development only)
-            import ssl
-            try:
-                _create_unverified_https_context = ssl._create_unverified_context
-            except AttributeError:
-                pass
-            else:
-                ssl._create_default_https_context = _create_unverified_https_context
-            
             self._client = og.Client(
                 private_key=private_key,
-                rpc_url="https://3.148.53.198",  # ogevmdevnet IP
-                api_url="https://3.16.84.142",   # llm/sdk IP  
-                og_llm_server_url="https://3.16.84.142",
-                og_llm_streaming_server_url="https://3.16.84.142",
             )
             self._initialized = True
             
@@ -419,18 +448,6 @@ class OpenGradientAnalyzer:
         2. Run OpenGradient TEE inference if not cached
         3. Cache result for 30 minutes
         """
-        # ═══ TEMPORARY: Skip OpenGradient until SSL is fixed ═══
-        OPENGRADIENT_DISABLED = True
-        
-        if OPENGRADIENT_DISABLED:
-            logger.warning("⚠️ OpenGradient DISABLED - using algorithmic scoring only")
-            return {
-                "used_opengradient": False,
-                "ai_result": None,
-                "tx_hash": None,
-                "error": "OpenGradient temporarily disabled (SSL issue)"
-            }
-
         # Check cache first
         cache_key = CacheKeys.ai_verdict(ticker)
         cached_result = await cache.get(cache_key)

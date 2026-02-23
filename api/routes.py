@@ -526,7 +526,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "ticker": ticker,
             "contract_address": contract_address,
             "overall_score": score,
-            "trust_score": score,  # ALGORITHMIC SCORE overrides AI fallback
+            "trust_score": ai_result.get("ai_trust_score", score) if ai_inference_success else score,
             "risk_level": overall["risk"],
             "scores": scores,
             "breakdown": breakdown,
@@ -548,7 +548,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "algorithm_notes": [
                 f"Scoring: v3.1 (Technical 65% / On-Chain 35%) - Chain: {chain_type.upper()}",
                 "Social: DISABLED",
-                f"AI: {'✅ Verified' if ai_inference_success else '⚠️ Algorithmic Only (AI maintenance)'}",
+                f"AI: {'✅ Verified by OpenGradient' if ai_inference_success else '⚠️ Algorithmic Only'}",
                 f"Data: DexScreener={'✅' if dex_data else '❌'}"
             ],
             "data_sources": data_sources,
