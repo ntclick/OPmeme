@@ -901,17 +901,25 @@
             ogBtn.href = data.verify_url;
             ogBtn.classList.remove('opacity-50', 'pointer-events-none');
             ogBtn.querySelector('span:last-child').innerHTML = `${t.aiBadgeLink} <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link w-3 h-3"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+        } else if (data.opengradient_used) {
+            ogBtn.href = "#";
+            ogBtn.classList.add('opacity-50', 'pointer-events-none');
+            ogBtn.querySelector('span:last-child').innerText = 'AI verified (no transfer tx hash)';
+            document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
+            ogBtn.classList.remove('from-blue-900/40', 'to-blue-950/40');
+            ogBtn.classList.add('from-gray-900', 'to-black');
         } else {
             ogBtn.href = "#";
             ogBtn.classList.add('opacity-50', 'pointer-events-none');
             ogBtn.querySelector('span:last-child').innerText = 'Thuật toán chấm điểm (AI bảo trì)';
             document.getElementById('aiBadgeTitle').innerText = 'CHẾ ĐỘ DỰ PHÒNG';
+
             ogBtn.classList.remove('from-gray-900', 'to-black');
             ogBtn.classList.add('from-blue-900/40', 'to-blue-950/40');
         }
 
         const txHashEl = document.getElementById('txHash');
-        if (txHashEl) {
+        if (txHashEl && data.tx_hash) {
             txHashEl.innerText = data.tx_hash.substring(0, 10) + '...';
         }
 

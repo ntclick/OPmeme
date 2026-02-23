@@ -406,7 +406,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             if not ai_data.get("verdict", "").startswith("Phân tích AI thất bại"):
                 ai_trust_score = ai_data.get("ai_trust_score")
                 ai_inference_success = True
-                tx_hash = ai_result.get("tx_hash")
+                tx_hash = ai_result.get("tx_hash") or ai_result.get("transaction_hash")
+                if isinstance(tx_hash, str) and tx_hash.lower() == "external":
+                    tx_hash = None
                 verify_url = f"https://explorer.opengradient.ai/tx/{tx_hash}" if tx_hash else None
                 verdict = ai_data.get("verdict", "")
                 logger.info(f"✅ AI inference SUCCESS: trust={ai_trust_score}, tx={tx_hash}")
@@ -528,7 +530,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "ticker": ticker,
             "contract_address": contract_address,
             "overall_score": score,
-            "trust_score": ai_result.get("ai_trust_score", score) if ai_inference_success else score,
+            "trust_score": ai_trust_score if ai_inference_success and ai_trust_score is not None else score,
             "risk_level": overall["risk"],
             "scores": scores,
             "breakdown": breakdown,
