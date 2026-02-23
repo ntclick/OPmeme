@@ -1,1 +1,0 @@
-['private_key', 'model_cid', 'max_tokens', 'x402_settlement_mode']
