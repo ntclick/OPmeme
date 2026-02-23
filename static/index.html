@@ -599,7 +599,7 @@
         }
     };
 
-    let currentLang = 'vi';
+    let currentLang = 'en';
 
     function applyLanguage() {
         const t = translations[currentLang];
@@ -657,13 +657,6 @@
         
         document.getElementById('verifiableInferenceText').innerText = t.verifiableInference;
         document.getElementById('scoringAlgoText').innerText = t.scoringAlgo;
-        document.getElementById('footerText').innerText = t.footer;
-    }
-
-    function toggleLanguage() {
-        currentLang = currentLang === 'en' ? 'vi' : 'en';
-        applyLanguage();
-        document.getElementById('langToggleBtn').innerText = currentLang === 'en' ? ' VN' : ' EN';
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -874,13 +867,17 @@
 
         const badge = document.getElementById('riskBadge');
         badge.innerText = data.risk_level || riskConfig.label;
+        
+        const breakdown = data.breakdown || {};
+        const tc = breakdown.technical?.components || {};
+        
         document.getElementById('score_momentum').innerText = tc.momentum?.score ?? '--';
         document.getElementById('score_volume').innerText = tc.volume?.score ?? '--';
         document.getElementById('score_trade').innerText = tc.trade_pressure?.score ?? '--';
         document.getElementById('score_liquidity').innerText = tc.liquidity?.score ?? '--';
         
         document.getElementById('onchainScoreTotal').innerText = breakdown.onchain?.total ?? '--';
-        const oc = breakdown.onchain?.components ?? {};
+        const oc = breakdown.onchain?.components || {};
         document.getElementById('score_holder').innerText = oc.holder?.score ?? '--';
         document.getElementById('score_security').innerText = oc.security?.score ?? '--';
         document.getElementById('score_whale').innerText = oc.whale_risk?.score ?? '--';
