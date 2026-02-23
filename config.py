@@ -16,6 +16,14 @@ else:
 
 # Database
 default_db_path = _here / "coincheckgo.db"
+try:
+    # Test if directory is writable
+    with open(default_db_path, "a") as f:
+        pass
+except (IOError, OSError):
+    import tempfile
+    default_db_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
+
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{default_db_path}")
 
 # Ensure SQLite directory exists if using a file path
