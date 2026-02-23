@@ -209,7 +209,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                                 # Canonicalize address for case-sensitive chains (Solana base58)
                                 base_addr = _safe_get(dex_data, "baseToken", "address")
                                 if base_addr and contract_address and chain_type == "solana" and base_addr != contract_address:
-                                    logger.info(f"🔧 Normalized Solana address from input to canonical mint: {base_addr[:8]}...")
+                                    logger.info(f"🔧 Normalized Solana address: {contract_address[:8]}... → {base_addr[:8]}...")
                                     contract_address = base_addr
                                 created = dex_data.get("pairCreatedAt", 0)
                                 if created:
@@ -226,7 +226,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             # 2. Chain-specific data fetching
             if chain_type == "solana":
                 # Birdeye (Solana only)
-                logger.info(f"🐦 Fetching Birdeye...")
+                logger.info(f"🐦 Fetching Birdeye for address: {contract_address}")
                 try:
                     raw = await birdeye_client.get_token_overview(contract_address)
                     if raw:
@@ -238,11 +238,16 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 except Exception as e:
                     logger.warning(f"⚠️ Birdeye failed: {e}")
                 
-                # Solana RPC
-                logger.info(f"🔗 Fetching Solana RPC...")
+                # Solana RPC  
+                logger.info(f"🔗 Fetching Solana RPC for: {contract_address}")
                 try:
                     token_info = await solana_scraper.get_token_info(contract_address) or {}
                     holder_data = await solana_scraper.get_top_holders(contract_address) or {}
+                    # Ensure consistent address usage - use the resolved mint from token_info if available
+                    resolved_mint = token_info.get("mint")
+                    if resolved_mint and resolved_mint != contract_address:
+                        logger.info(f"🔧 Solana RPC resolved mint: {contract_address[:8]}... → {resolved_mint[:8]}...")
+                        contract_address = resolved_mint
                     logger.info(f"✅ Solana RPC: mint_renounced={token_info.get('is_mint_renounced')}")
                 except Exception as e:
                     logger.warning(f"⚠️ Solana RPC failed: {e}")

@@ -126,7 +126,7 @@ class SafeOpenGradientLLM(BaseChatModel):
                 messages=formatted_msgs,
                 max_tokens=800,
                 temperature=0.3,
-                x402_settlement_mode=og.x402SettlementMode.SETTLE_ONCHAIN
+                x402_settlement_mode=og.x402SettlementMode.SETTLE_METADATA
             )
         except Exception as e:
             logger_err = f"TEE SDK Error: {e}"
@@ -537,7 +537,7 @@ class OpenGradientAnalyzer:
                 messages=messages,
                 max_tokens=2000,
                 temperature=0.1,  # Low temp for consistent structured output
-                x402_settlement_mode=self._og.x402SettlementMode.SETTLE_ONCHAIN,
+                x402_settlement_mode=self._og.x402SettlementMode.SETTLE_METADATA,
             )
             
             raw_output = completion.chat_output.get("content", "") if completion.chat_output else ""
