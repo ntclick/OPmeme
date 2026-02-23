@@ -655,14 +655,20 @@ class OpenGradientAnalyzer:
         extra_context: str = "",
     ) -> str:
         """Build input text for the LLM. Includes token classification for nuanced scoring."""
+
+        def _as_float(value, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
         
         # Calculate token classification for AI context
         holder_data = on_chain.get("holders", {}) if on_chain else {}
         token_info = on_chain.get("token_info", {}) if on_chain else {}
         
-        holder_count = holder_data.get("total_holders", 0)
-        token_age_hours = token_info.get("age_hours", 0)
-        liquidity_usd = on_chain.get("liquidity_usd", 0) if on_chain else 0
+        holder_count = int(_as_float(holder_data.get("total_holders", 0), 0.0))
+        token_age_hours = _as_float(token_info.get("age_hours", 0), 0.0)
+        liquidity_usd = _as_float(on_chain.get("liquidity_usd", 0), 0.0) if on_chain else 0.0
         
         # Classification thresholds (must match routes.py)
         is_established = holder_count > 10000 or token_age_hours > 720  # >10K holders or >30 days
