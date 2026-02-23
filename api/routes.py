@@ -421,9 +421,11 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             else:
                 logger.warning("⚠️ AI returned default fallback - ignoring")
 
+        # Always get the algorithmic score first
+        score = overall["score"]
+        
         # Generate verdict từ ALGORITHMIC score (không dùng AI)
         if not ai_inference_success or not verdict:
-            score = overall["score"]  # ← Dùng calculated score!
             if score >= 70:
                 verdict = f"${ticker}: Strong technical metrics. Relatively safe for meme coin."
             elif score >= 50:
