@@ -1,0 +1,969 @@
+# api/routes.py — FastAPI API endpoints (FIXED v3.0)
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func as sql_func
+from datetime import datetime, timedelta
+import time
+import json
+import re
+import logging
+import httpx
+from pydantic import BaseModel
+
+from api.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    HistoryResponse,
+    ReportSummary,
+    TrendingResponse,
+    TrendingItem,
+    ScoreBreakdown,
+)
+from database.engine import get_db
+from database.models import Coin, AnalysisReport
+from database import crud
+from scrapers.twitter_scraper import TwitterScraper
+from scrapers.solana_scraper import SolanaScraper
+from scrapers.birdeye_client import create_birdeye_client
+from analysis.scoring import (
+    calculate_social_score,
+    calculate_holder_score,
+    calculate_overall_score,
+    calculate_security_score,
+)
+from analysis.technical_analyzer import TechnicalAnalyzer
+from analysis.liquidity_analyzer import LiquidityAnalyzer
+from analysis.bot_detector import calculate_bot_score
+from analysis.sentiment import calculate_sentiment_score
+from analysis.opengradient import OpenGradientAnalyzer
+from utils.cache import check_cache, set_cache, cache, CacheKeys, CacheTTL
+
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# Instantiate services
+twitter_scraper = TwitterScraper()
+solana_scraper = SolanaScraper()
+birdeye_client = create_birdeye_client()
+og_analyzer = None  # Lazy load
+tech_analyzer = TechnicalAnalyzer()
+liquidity_analyzer = LiquidityAnalyzer()
+
+CACHE_TTL_MINUTES = 15
+
+
+class DexSearchRequest(BaseModel):
+    query: str
+
+
+@router.get("/api/dex/tokens/{addresses}")
+async def proxy_dex_tokens(addresses: str):
+    """Proxy DexScreener Tokens API (for trending/multiple addresses)."""
+    url = f"https://api.dexscreener.com/latest/dex/tokens/{addresses}"
+    logger.info(f"🔍 [DexScreener] Proxying tokens: {addresses[:20]}...")
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info(f"✅ [DexScreener] Found {len(data.get('pairs', []))} pairs")
+            return data
+        except Exception as e:
+            logger.error(f"❌ [DexScreener] Tokens proxy failed: {e}")
+            raise HTTPException(status_code=502, detail="Failed to fetch tokens")
+
+
+@router.get("/api/dex/search")
+async def proxy_dex_search(q: str):
+    """Proxy DexScreener API requests."""
+    url = f"https://api.dexscreener.com/latest/dex/search?q={q}"
+    logger.info(f"🔍 [DexScreener] Proxying search for: {q}")
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info(f"✅ [DexScreener] Found {len(data.get('pairs', []))} pairs")
+            return data
+        except Exception as e:
+            logger.error(f"❌ [DexScreener] Proxy failed: {e}")
+            raise HTTPException(status_code=502, detail="Failed to fetch from DexScreener")
+
+
+@router.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
+    """
+    MAIN ENDPOINT: Analyze a meme coin with Technical Focus (55/30/15).
+    """
+    global og_analyzer
+    if og_analyzer is None:
+        og_analyzer = OpenGradientAnalyzer()
+        
+    ticker = request.ticker.strip().strip("$#")
+    contract_address = request.contract_address
+    force_refresh = getattr(request, 'force_refresh', False)
+    start_time = time.time()
+
+    # Auto-detect: if ticker looks like a Solana address, swap it
+    logger.info(f"Incoming ticker input: '{ticker}' (len: {len(ticker)})")
+
+    if len(ticker) > 30 and " " not in ticker:
+        contract_address = contract_address or ticker
+        logger.info(f"Detected contract address: {contract_address}")
+        
+        try:
+            resolved_symbol = await solana_scraper.get_token_symbol(contract_address)
+            if resolved_symbol:
+                ticker = resolved_symbol.upper()
+            else:
+                ticker = ticker[:8].upper()
+        except:
+            ticker = ticker[:8].upper()
+    else:
+        ticker = ticker.upper()
+
+    # ── STEP 1: Check cache ──
+    if not request.force_refresh:
+        cache_key = CacheKeys.full_analysis(contract_address or ticker)
+        cached = await cache.get(cache_key)
+        if cached:
+            cached["cached"] = True
+            logger.info(f"Analyze cache hit for {ticker}")
+            return AnalyzeResponse(**cached)
+
+    try:
+        # ── STEP 2: Ensure coin exists in DB ──
+        coin = crud.get_or_create_coin(db, ticker, contract_address)
+
+        # ── STEP 3: Scrape Twitter ──
+        tweets = []
+        try:
+            tweets = twitter_scraper.scrape_by_ticker(ticker, max_tweets=100)
+        except Exception as scrape_err:
+            logger.warning(f"Twitter scraping failed for {ticker}: {scrape_err}")
+
+        if tweets:
+            crud.save_tweets(db, coin.id, tweets)
+
+        # ── STEP 4: Get Solana on-chain data + Birdeye data ──
+        on_chain_data = {}
+        birdeye_data = {}
+        dex_data = {}
+        token_age_hours = 0
+        market_cap = 0
+        
+        if contract_address:
+            # Fetch token info
+            token_info = await solana_scraper.get_token_info(contract_address)
+            
+            # Check for cached expensive data (5 min TTL)
+            cache_key_base = f"onchain:{contract_address}"
+            cached_expensive = None if force_refresh else await cache.get(f"{cache_key_base}:expensive")
+            
+            if cached_expensive:
+                holder_data = cached_expensive.get("holders", {})
+                birdeye_data = cached_expensive.get("birdeye", {})
+                smart_money_data = cached_expensive.get("smart_money", {})
+                logger.info(f"Using cached on-chain data for {contract_address}")
+            else:
+                logger.info(f"Fetching fresh on-chain data for {contract_address}")
+                
+                holder_data = await solana_scraper.get_top_holders(contract_address)
+                
+                # Fetch Birdeye data (CRITICAL for Technical Analysis!)
+                birdeye_data = {}
+                try:
+                    raw_overview = await birdeye_client.get_token_overview(contract_address)
+                    if raw_overview:
+                        birdeye_data = birdeye_client.extract_scores_from_overview(raw_overview)
+                        # Also store raw data for technical analysis
+                        birdeye_data["raw"] = raw_overview
+                        market_cap = birdeye_data.get("market_cap", 0) or 0
+                        logger.info(f"✅ Birdeye: MC=${market_cap:,.0f}, Holders={birdeye_data.get('holder_count', 0)}")
+                except Exception as e:
+                    logger.warning(f"Birdeye fetch failed: {e}")
+                
+                # Fetch Smart Money stats
+                smart_money_data = {}
+                try:
+                    smart_money_data = await birdeye_client.get_smart_money_stats(contract_address)
+                    if smart_money_data:
+                        logger.info(f"Smart Money: {smart_money_data.get('smart_money_count')} wallets")
+                except Exception as e:
+                    logger.warning(f"Smart Money fetch failed: {e}")
+                
+                # Cache expensive data
+                expensive_data = {
+                    "holders": holder_data,
+                    "birdeye": birdeye_data,
+                    "smart_money": smart_money_data,
+                }
+                await cache.set(f"{cache_key_base}:expensive", expensive_data, ttl=300)
+            
+            # Fetch DexScreener data (for price changes + token age)
+            try:
+                async with httpx.AsyncClient() as client:
+                    dex_url = f"https://api.dexscreener.com/latest/dex/tokens/{contract_address}"
+                    dex_resp = await client.get(dex_url, timeout=10.0)
+                    if dex_resp.status_code == 200:
+                        dex_json = dex_resp.json()
+                        pairs = dex_json.get("pairs", [])
+                        if pairs:
+                            best_pair = max(pairs, key=lambda x: x.get("liquidity", {}).get("usd", 0) or 0)
+                            dex_data = best_pair
+                            created_at = best_pair.get("pairCreatedAt", 0)
+                            if created_at:
+                                now_ms = int(time.time() * 1000)
+                                age_ms = now_ms - created_at
+                                token_age_hours = age_ms / (1000 * 3600)
+                            logger.info(f"✅ DexScreener: Liquidity=${best_pair.get('liquidity', {}).get('usd', 0):,.0f}")
+            except Exception as e:
+                logger.warning(f"DexScreener fetch failed: {e}")
+            
+            on_chain_data = {
+                "token_info": token_info,
+                "holders": holder_data,
+                "smart_money": smart_money_data,
+            }
+
+            if token_info and token_info.get("symbol"):
+                real_symbol = token_info["symbol"].upper().strip()
+                if len(real_symbol) < 20:
+                    ticker = real_symbol
+
+        # ══════════════════════════════════════════════════════════════════════
+        # STEP 5: Calculate ALL Component Scores
+        # ══════════════════════════════════════════════════════════════════════
+        
+        # === SOCIAL (15%) ===
+        social_result = calculate_social_score(tweets)
+        bot_result = calculate_bot_score(tweets)
+        sentiment_result = calculate_sentiment_score(tweets)
+        
+        # === ON-CHAIN (30%) ===
+        holder_result = calculate_holder_score(
+            on_chain_data.get("holders"),
+            on_chain_data.get("token_info"),
+        )
+        
+        security_result = calculate_security_score(
+            on_chain_data.get("token_info"),
+            token_age_hours
+        )
+        
+        # Whale Risk Score (from top 10 concentration)
+        whale_risk_score = _calculate_whale_risk_score(on_chain_data.get("holders", {}))
+        
+        # === TECHNICAL (55%) ===
+        # Build price_changes dict from Birdeye + DexScreener
+        price_changes = {
+            "1h": birdeye_data.get("price_change_1h") or dex_data.get("priceChange", {}).get("h1", 0) or 0,
+            "6h": dex_data.get("priceChange", {}).get("h6", 0) or 0,
+            "24h": birdeye_data.get("price_change_24h") or dex_data.get("priceChange", {}).get("h24", 0) or 0,
+        }
+        
+        # Momentum Score (20%)
+        try:
+            momentum_result = tech_analyzer.calculate_momentum_score(price_changes)
+        except Exception as e:
+            logger.warning(f"Momentum analysis failed: {e}")
+            momentum_result = {"momentum_score": 50, "trend": "UNKNOWN", "details": []}
+        
+        # Volume Score (15%)
+        try:
+            volume_result = tech_analyzer.calculate_volume_score(birdeye_data)
+        except Exception as e:
+            logger.warning(f"Volume analysis failed: {e}")
+            volume_result = {"volume_score": 50, "details": []}
+        
+        # Trade Pressure Score (10%)
+        try:
+            trade_pressure_result = tech_analyzer.calculate_trade_pressure_score(birdeye_data)
+        except Exception as e:
+            logger.warning(f"Trade pressure analysis failed: {e}")
+            trade_pressure_result = {"trade_pressure_score": 50, "details": []}
+        
+        # Liquidity Score (10%)
+        try:
+            liquidity_result = await liquidity_analyzer.calculate_liquidity_score(
+                contract_address,
+                birdeye_data,
+                on_chain_data.get("holders", {})
+            )
+        except Exception as e:
+            logger.warning(f"Liquidity analysis failed: {e}")
+            liquidity_result = {"liquidity_score": 50, "details": []}
+
+        # ══════════════════════════════════════════════════════════════════════
+        # STEP 6: Calculate Overall Score with V3.0 Weights (55/30/15)
+        # ══════════════════════════════════════════════════════════════════════
+        
+        overall_result = _calculate_overall_score_v3(
+            # Technical (55%)
+            momentum_score=momentum_result.get("momentum_score", 50),
+            volume_score=volume_result.get("volume_score", 50),
+            trade_pressure_score=trade_pressure_result.get("trade_pressure_score", 50),
+            liquidity_score=liquidity_result.get("liquidity_score", 50),
+            # On-Chain (30%)
+            holder_score=holder_result.get("holder_score", 50),
+            security_score=security_result.get("security_score", 50),
+            whale_risk_score=whale_risk_score,
+            # Social (15%)
+            community_score=social_result.get("social_score", 50),
+            bot_score=bot_result.get("bot_score", 50),
+            # Override checks
+            token_info=on_chain_data.get("token_info", {}),
+            holder_data=on_chain_data.get("holders", {}),
+            liquidity_usd=birdeye_data.get("liquidity", 0) or dex_data.get("liquidity", {}).get("usd", 0) or 0,
+            token_age_hours=token_age_hours
+        )
+
+        # ── STEP 7: OpenGradient Verifiable AI ──
+        og_result = await og_analyzer.analyze_coin(
+            ticker=ticker,
+            tweets_summary=tweets[:20],
+            on_chain_data=on_chain_data,
+            scoring_result={
+                "social_score": social_result["social_score"],
+                "bot_score": bot_result["bot_score"],
+                "holder_score": holder_result["holder_score"],
+                "momentum_score": momentum_result["momentum_score"],
+                "volume_score": volume_result["volume_score"],
+                "liquidity_score": liquidity_result["liquidity_score"],
+            },
+        )
+
+        # Extract AI results
+        ai = og_result.get("ai_result")
+        
+        if ai and ai.get("ai_trust_score") is not None:
+            sentiment_final = ai.get("ai_sentiment_score", sentiment_result["sentiment_score"])
+            ai_trust = ai["ai_trust_score"]
+        else:
+            sentiment_final = sentiment_result["sentiment_score"]
+            ai_trust = None
+
+        opengradient_used = bool(og_result.get("used_opengradient"))
+
+        # ── STEP 8: Compile red/green flags ──
+        all_red_flags: list[str] = []
+        all_green_flags: list[str] = []
+
+        # From technical analysis
+        if momentum_result.get("trend") == "DUMP_AFTER_PUMP":
+            all_red_flags.append("🔴 Dump after pump pattern detected")
+        if momentum_result.get("trend") == "STRONG_BEARISH":
+            all_red_flags.append("🔴 Strong bearish trend")
+        if momentum_result.get("trend") == "STRONG_BULLISH":
+            all_green_flags.append("🟢 Strong bullish trend")
+            
+        # From volume analysis
+        if volume_result.get("buy_volume_pct", 50) > 65:
+            all_green_flags.append(f"🟢 Buy pressure dominant ({volume_result['buy_volume_pct']:.0f}%)")
+        if volume_result.get("buy_volume_pct", 50) < 35:
+            all_red_flags.append(f"🔴 Heavy sell pressure ({100 - volume_result['buy_volume_pct']:.0f}%)")
+
+        # From bot detector
+        if bot_result.get("bot_patterns_found"):
+            all_red_flags.extend(f for f in bot_result["bot_patterns_found"] if "No bot" not in f)
+
+        # From holder analysis
+        if holder_result.get("red_flags"):
+            all_red_flags.extend(holder_result["red_flags"])
+
+        # From overall result - ADD OVERRIDE REASONS
+        if overall_result.get("override_reasons"):
+            all_red_flags.extend(overall_result["override_reasons"])
+            logger.info(f"Override applied: {overall_result['override_reasons']}")
+
+        # From AI
+        if ai:
+            all_red_flags.extend(ai.get("red_flags", []))
+            all_green_flags.extend(ai.get("green_flags", []))
+
+        # Auto flags based on scores
+        if social_result["social_score"] > 70:
+            all_green_flags.append("Active Community")
+        elif social_result["social_score"] == 0:
+            all_red_flags.append("🔴 No social media presence detected")
+            
+        if bot_result["bot_score"] > 80:
+            all_green_flags.append("Low bot activity")
+        if holder_result.get("mint_renounced"):
+            all_green_flags.append("Mint authority renounced ✓")
+        if liquidity_result.get("liquidity_score", 0) > 70:
+            all_green_flags.append("Liquidity Locked")
+        if whale_risk_score > 70:
+            all_green_flags.append("Good token distribution")
+        elif whale_risk_score < 30:
+            all_red_flags.append(f"🔴 High whale concentration")
+
+        # WARNING: Limited market data (default scores)
+        default_count = sum([
+            1 if volume_result.get("volume_score", 50) == 50 else 0,
+            1 if trade_pressure_result.get("trade_pressure_score", 50) == 50 else 0,
+            1 if liquidity_result.get("liquidity_score", 50) == 50 else 0
+        ])
+        if default_count >= 2:
+            logger.warning(f"⚠️ Limited market data for {ticker} - {default_count}/3 technical scores are defaults")
+            all_red_flags.append(f"🟡 Limited market data ({default_count} technical metrics unavailable)")
+
+        # Deduplicate
+        all_red_flags = list(dict.fromkeys(all_red_flags))
+        all_green_flags = list(dict.fromkeys(all_green_flags))
+
+        # ── STEP 9: Build verdict ──
+        if ai and ai.get("verdict"):
+            verdict = ai.get("verdict")
+        else:
+            # Generate detailed verdict from score with context
+            score = overall_result["overall_score"]
+            raw_score = overall_result.get("raw_score", score)
+            override_reasons = overall_result.get("override_reasons", [])
+            
+            # Build context string
+            context_parts = []
+            
+            # Add override info if applicable
+            if override_reasons and raw_score > score:
+                context_parts.append(f"Score capped from {raw_score:.0f} to {score:.0f}")
+                # Add primary override reason (first one)
+                primary_reason = override_reasons[0].replace("🔴", "").replace("🟡", "").split("→")[0].strip()
+                context_parts.append(primary_reason)
+            
+            # Add social context
+            if social_result["social_score"] == 0:
+                context_parts.append("No social presence detected")
+            elif social_result["social_score"] > 50:
+                context_parts.append("Active community")
+                
+            # Add liquidity context if low
+            if liquidity_result.get("liquidity_score", 50) < 30:
+                context_parts.append("Low liquidity warning")
+            
+            context_str = "; ".join(context_parts) if context_parts else ""
+            
+            # Build final verdict
+            if score >= 70:
+                base_verdict = f"${ticker}: Strong fundamentals. Relatively safe for a meme coin."
+            elif score >= 50:
+                base_verdict = f"${ticker}: Mixed signals. DYOR carefully before investing."
+            elif score >= 35:
+                base_verdict = f"${ticker}: Multiple red flags detected. High risk."
+            else:
+                base_verdict = f"${ticker}: EXTREME RISK. Proceed with extreme caution."
+            
+            # Append context if available
+            if context_str:
+                verdict = f"{base_verdict} ({context_str})"
+            else:
+                verdict = base_verdict
+
+        # ── STEP 10: Save to DB ──
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        report = AnalysisReport(
+            coin_id=coin.id,
+            overall_score=overall_result["overall_score"],
+            risk_level=overall_result["risk_level"],
+            social_score=social_result["social_score"],
+            bot_score=bot_result["bot_score"],
+            sentiment_score=sentiment_final,
+            holder_score=holder_result["holder_score"],
+            verdict=verdict,
+            red_flags=json.dumps(all_red_flags),
+            green_flags=json.dumps(all_green_flags),
+            detailed_analysis=json.dumps(og_result.get("ai_result")),
+            tx_hash=og_result.get("tx_hash"),
+            model_cid=og_result.get("model_cid"),
+            inference_proof=json.dumps(og_result),
+            tweet_count_analyzed=len(tweets),
+            analysis_duration_ms=duration_ms,
+        )
+        db.add(report)
+        db.commit()
+
+        coin.last_checked_at = datetime.utcnow()
+        db.commit()
+
+        # ══════════════════════════════════════════════════════════════════════
+        # STEP 11: Build Response with FULL Score Breakdown
+        # ══════════════════════════════════════════════════════════════════════
+        
+        has_twitter_real_data = len(tweets) > 0
+        has_onchain_real_data = bool(on_chain_data.get("token_info") or on_chain_data.get("holders"))
+        
+        data_sources = {
+            "twitter": {
+                "provider": "TwitterScraper (Apify-backed)",
+                "real_data": has_twitter_real_data,
+                "tweets_collected": len(tweets),
+            },
+            "solana": {
+                "provider": "Solana RPC + Birdeye",
+                "contract_address": contract_address,
+                "real_data": has_onchain_real_data,
+            },
+            "birdeye": {
+                "used": bool(birdeye_data),
+                "holder_count": birdeye_data.get("holder_count"),
+                "volume_24h": birdeye_data.get("volume_24h"),
+            },
+            "dexscreener": {
+                "used": bool(dex_data),
+                "liquidity_usd": dex_data.get("liquidity", {}).get("usd") if dex_data else None,
+            },
+            "opengradient": {
+                "used": opengradient_used,
+                "ai_trust_score": ai_trust,
+                "tx_hash": og_result.get("tx_hash"),
+            },
+        }
+
+        # Build ScoreBreakdown that matches the schema!
+        score_breakdown = ScoreBreakdown(
+            social_score=social_result["social_score"],
+            bot_score=bot_result["bot_score"],
+            sentiment_score=sentiment_final,
+            holder_score=holder_result["holder_score"],
+            ai_trust_score=ai_trust,
+            liquidity_score=liquidity_result.get("liquidity_score"),
+            security_score=security_result.get("security_score"),
+            momentum_score=momentum_result.get("momentum_score"),
+            volume_score=volume_result.get("volume_score"),
+        )
+        
+        # NEW: Extended breakdown for frontend v3.0 UI
+        extended_breakdown = {
+            "technical": {
+                "total": overall_result["breakdown"]["technical"]["total"],
+                "weight": "55%",
+                "components": {
+                    "momentum": {
+                        "score": momentum_result.get("momentum_score", 50),
+                        "weight": "20%",
+                        "trend": momentum_result.get("trend", "UNKNOWN"),
+                        "details": momentum_result.get("details", [])
+                    },
+                    "volume": {
+                        "score": volume_result.get("volume_score", 50),
+                        "weight": "15%",
+                        "buy_pct": volume_result.get("buy_volume_pct", 50),
+                        "vol_mcap_ratio": volume_result.get("volume_mcap_ratio", 0),
+                        "details": volume_result.get("details", [])
+                    },
+                    "trade_pressure": {
+                        "score": trade_pressure_result.get("trade_pressure_score", 50),
+                        "weight": "10%",
+                        "buy_sell_ratio": trade_pressure_result.get("buy_sell_ratio", 1.0),
+                        "unique_traders": trade_pressure_result.get("unique_traders", 0),
+                        "details": trade_pressure_result.get("details", [])
+                    },
+                    "liquidity": {
+                        "score": liquidity_result.get("liquidity_score", 50),
+                        "weight": "10%",
+                        "liquidity_usd": birdeye_data.get("liquidity", 0) or dex_data.get("liquidity", {}).get("usd", 0),
+                        "details": liquidity_result.get("details", [])
+                    }
+                }
+            },
+            "onchain": {
+                "total": overall_result["breakdown"]["onchain"]["total"],
+                "weight": "30%",
+                "components": {
+                    "holder": {
+                        "score": holder_result.get("holder_score", 50),
+                        "weight": "12%",
+                        "holder_count": birdeye_data.get("holder_count") or on_chain_data.get("holders", {}).get("total_holders", 0),
+                        "top10_pct": on_chain_data.get("holders", {}).get("top10_pct", 0)
+                    },
+                    "security": {
+                        "score": security_result.get("security_score", 50),
+                        "weight": "12%",
+                        "mint_renounced": holder_result.get("mint_renounced", False),
+                        "freeze_renounced": on_chain_data.get("token_info", {}).get("freeze_authority") is None,
+                        "token_age_hours": round(token_age_hours, 1)
+                    },
+                    "whale_risk": {
+                        "score": whale_risk_score,
+                        "weight": "6%",
+                        "top10_concentration": on_chain_data.get("holders", {}).get("top10_pct", 0)
+                    }
+                }
+            },
+            "social": {
+                "total": overall_result["breakdown"]["social"]["total"],
+                "weight": "15%",
+                "components": {
+                    "community": {
+                        "score": social_result.get("social_score", 50),
+                        "weight": "10%",
+                        "tweet_count": len(tweets),
+                        "unique_authors": social_result.get("unique_authors", 0)
+                    },
+                    "bot_detect": {
+                        "score": bot_result.get("bot_score", 50),
+                        "weight": "5%",
+                        "patterns_found": len(bot_result.get("bot_patterns_found", []))
+                    }
+                }
+            }
+        }
+
+        response_data = {
+            "ticker": ticker,
+            "contract_address": contract_address,
+            "overall_score": overall_result["overall_score"],
+            "trust_score": overall_result["overall_score"],
+            "risk_level": overall_result["risk_level"],
+            
+            # ScoreBreakdown - matches schema!
+            "scores": score_breakdown,
+            
+            # Extended breakdown for v3.0 UI
+            "breakdown": extended_breakdown,
+            
+            # Technical signals
+            "technical_indicators": {
+                "rsi": None,  # TODO: implement if needed
+                "rsi_signal": momentum_result.get("rsi_signal"),
+                "divergence": momentum_result.get("divergence"),
+                "trend": momentum_result.get("trend"),
+                "buy_sell_ratio": trade_pressure_result.get("buy_sell_ratio"),
+            },
+            
+            # Signals
+            "signals": {
+                "bullish": all_green_flags,
+                "bearish": all_red_flags,
+                "neutral": [f"Token age: {token_age_hours:.1f} hours"] if token_age_hours else []
+            },
+            
+            "verdict": verdict,
+            "red_flags": all_red_flags,
+            "green_flags": all_green_flags,
+            "tx_hash": og_result.get("tx_hash"),
+            "verify_url": (
+                f"https://explorer.opengradient.ai/tx/{og_result['tx_hash']}"
+                if og_result.get("tx_hash") else None
+            ),
+            "tweets_analyzed": len(tweets),
+            "analyzed_at": datetime.utcnow(),
+            "cached": False,
+            "opengradient_used": opengradient_used,
+            "algorithm_notes": [
+                f"Scoring: v3.0 (Technical 55% / On-Chain 30% / Social 15%)",
+                f"AI Trust Score: {ai_trust}/100" if ai_trust else "AI unavailable, using algorithmic score",
+            ],
+            "data_sources": data_sources,
+        }
+
+        # Cache result
+        cache_key = CacheKeys.full_analysis(contract_address or ticker)
+        await cache.set(cache_key, response_data, CacheTTL.FULL_ANALYSIS)
+
+        logger.info(
+            f"✅ Analysis completed for {ticker} in {duration_ms}ms | "
+            f"score={overall_result['overall_score']} risk={overall_result['risk_level']} "
+            f"og_used={opengradient_used}"
+        )
+
+        return AnalyzeResponse(**response_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_detail = f"Analysis failed for {ticker}: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_detail)
+        raise HTTPException(status_code=500, detail=error_detail[:500])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Helper Functions
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _calculate_whale_risk_score(holder_data: dict) -> int:
+    """Calculate whale risk score based on top 10 holder concentration."""
+    if not holder_data:
+        return 50
+    
+    top10_pct = holder_data.get("top10_pct", 50)
+    
+    if top10_pct < 20: return 100
+    if top10_pct < 30: return 85
+    if top10_pct < 40: return 70
+    if top10_pct < 50: return 55
+    if top10_pct < 60: return 40
+    if top10_pct < 70: return 25
+    if top10_pct < 80: return 15
+    return 5
+
+
+def _calculate_overall_score_v3(
+    # Technical (55%)
+    momentum_score: int,
+    volume_score: int,
+    trade_pressure_score: int,
+    liquidity_score: int,
+    # On-Chain (30%)
+    holder_score: int,
+    security_score: int,
+    whale_risk_score: int,
+    # Social (15%)
+    community_score: int,
+    bot_score: int,
+    # Override checks
+    token_info: dict,
+    holder_data: dict,
+    liquidity_usd: float,
+    token_age_hours: float
+) -> dict:
+    """
+    Calculate Overall Score with v3.0 weights: Technical 55% / On-Chain 30% / Social 15%
+    """
+    
+    # Technical (55%)
+    technical_total = (
+        momentum_score * 0.20 +
+        volume_score * 0.15 +
+        trade_pressure_score * 0.10 +
+        liquidity_score * 0.10
+    )
+    
+    # On-Chain (30%)
+    onchain_total = (
+        holder_score * 0.12 +
+        security_score * 0.12 +
+        whale_risk_score * 0.06
+    )
+    
+    # Social (15%)
+    social_total = (
+        community_score * 0.10 +
+        bot_score * 0.05
+    )
+    
+    raw_score = technical_total + onchain_total + social_total
+    
+    # ═══ Override Rules (Hard Caps) - NUANCED FOR ESTABLISHED TOKENS ═══
+    max_cap = 100
+    override_reasons = []
+    
+    # SAFETY SIGNALS: Established tokens get relaxed penalties
+    holder_count = holder_data.get("total_holders", 0)
+    is_established = holder_count > 10000 or token_age_hours > 720  # > 10K holders or > 30 days
+    is_large_cap = liquidity_usd > 1000000 or holder_count > 50000  # > $1M liquidity or > 50K holders
+    
+    logger.info(f"Token profile: holders={holder_count}, age={token_age_hours:.1f}h, "
+                f"established={is_established}, large_cap={is_large_cap}")
+    
+    # P1 Overrides (Highest risk - but relaxed for established tokens)
+    if token_info.get("mint_authority") is not None:
+        if is_large_cap:
+            # Large cap with mint authority is less risky
+            max_cap = min(max_cap, 70)
+            override_reasons.append("🟡 Mint authority ACTIVE (large cap) → max 70")
+        elif is_established:
+            max_cap = min(max_cap, 55)
+            override_reasons.append("🟡 Mint authority ACTIVE (established) → max 55")
+        else:
+            max_cap = min(max_cap, 35)
+            override_reasons.append("🔴 Mint authority ACTIVE → max 35")
+    
+    if liquidity_usd < 10000:
+        if is_established:
+            # Established token might have liquidity on other venues
+            max_cap = min(max_cap, 50)
+            override_reasons.append("🟡 Liquidity < $10K (established) → max 50")
+        else:
+            max_cap = min(max_cap, 30)
+            override_reasons.append("🔴 Liquidity < $10K → max 30")
+    
+    top10_pct = holder_data.get("top10_pct", 0)
+    if top10_pct > 80:
+        if is_large_cap:
+            # Large cap with whale concentration is less risky (likely early investors)
+            max_cap = min(max_cap, 65)
+            override_reasons.append("🟡 Top 10 hold > 80% (large cap) → max 65")
+        elif is_established:
+            max_cap = min(max_cap, 50)
+            override_reasons.append("🟡 Top 10 hold > 80% (established) → max 50")
+        else:
+            max_cap = min(max_cap, 30)
+            override_reasons.append("🔴 Top 10 hold > 80% → max 30")
+    elif top10_pct > 60 and not is_established:
+        # Only warn for new tokens with moderate concentration
+        override_reasons.append("🟡 Top 10 hold > 60% - monitor closely")
+    
+    # P2 Overrides (Medium risk)
+    if holder_count and holder_count < 100:
+        max_cap = min(max_cap, 35)
+        override_reasons.append("🔴 Holders < 100 → max 35")
+    elif holder_count and holder_count < 500 and not is_established:
+        max_cap = min(max_cap, 45)
+        override_reasons.append("� Holders < 500 → max 45")
+    
+    if token_age_hours < 24:
+        if holder_count > 1000:
+            # New but already has traction
+            max_cap = min(max_cap, 55)
+            override_reasons.append("🟡 Token < 24h but trending → max 55")
+        else:
+            max_cap = min(max_cap, 40)
+            override_reasons.append("🔴 Token < 24h old → max 40")
+    elif token_age_hours < 72 and not is_established and holder_count < 100:
+        max_cap = min(max_cap, 50)
+        override_reasons.append("🟡 Token < 3 days with few holders → max 50")
+    
+    # P3 Overrides (Lower risk)
+    if token_info.get("freeze_authority") is not None:
+        if is_large_cap:
+            max_cap = min(max_cap, 75)
+            override_reasons.append("🟢 Freeze authority active (large cap) → max 75")
+        else:
+            max_cap = min(max_cap, 50)
+            override_reasons.append("🟡 Freeze authority active → max 50")
+    
+    # Apply cap
+    final_score = min(raw_score, max_cap)
+    final_score = max(0, min(100, int(final_score)))
+    
+    # Determine risk level
+    if final_score >= 80:
+        risk_level = "MOON"
+    elif final_score >= 65:
+        risk_level = "LOW"
+    elif final_score >= 50:
+        risk_level = "MEDIUM"
+    elif final_score >= 35:
+        risk_level = "HIGH"
+    elif final_score >= 20:
+        risk_level = "EXTREME"
+    else:
+        risk_level = "AVOID"
+    
+    return {
+        "overall_score": final_score,
+        "risk_level": risk_level,
+        "raw_score": int(raw_score),
+        "max_cap_applied": max_cap if max_cap < 100 else None,
+        "override_reasons": override_reasons,
+        "breakdown": {
+            "technical": {
+                "total": round(technical_total, 1),
+                "weight": "55%"
+            },
+            "onchain": {
+                "total": round(onchain_total, 1),
+                "weight": "30%"
+            },
+            "social": {
+                "total": round(social_total, 1),
+                "weight": "15%"
+            }
+        }
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Other Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/coin/{ticker}/history", response_model=HistoryResponse)
+async def get_analysis_history(
+    ticker: str, limit: int = 10, db: Session = Depends(get_db)
+):
+    """Get the analysis history for a coin."""
+    coin = db.query(Coin).filter(Coin.symbol == ticker.upper()).first()
+    if not coin:
+        raise HTTPException(status_code=404, detail="Coin not found")
+
+    reports = (
+        db.query(AnalysisReport)
+        .filter(AnalysisReport.coin_id == coin.id)
+        .order_by(AnalysisReport.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return HistoryResponse(
+        ticker=ticker.upper(),
+        reports=[
+            ReportSummary(
+                id=r.id,
+                overall_score=r.overall_score,
+                risk_level=r.risk_level,
+                verdict=r.verdict,
+                tx_hash=r.tx_hash,
+                analyzed_at=r.created_at,
+            )
+            for r in reports
+        ],
+    )
+
+
+@router.get("/api/trending", response_model=TrendingResponse)
+async def get_trending(db: Session = Depends(get_db)):
+    """Top coins checked most in the last 24 hours."""
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+
+    results = (
+        db.query(
+            Coin.symbol,
+            sql_func.count(AnalysisReport.id).label("check_count"),
+            sql_func.avg(AnalysisReport.overall_score).label("avg_score"),
+        )
+        .join(AnalysisReport)
+        .filter(AnalysisReport.created_at > cutoff)
+        .group_by(Coin.symbol)
+        .order_by(sql_func.count(AnalysisReport.id).desc())
+        .limit(20)
+        .all()
+    )
+
+    return TrendingResponse(
+        trending=[
+            TrendingItem(
+                ticker=r.symbol,
+                checks_24h=r.check_count,
+                avg_score=round(r.avg_score, 1) if r.avg_score else None,
+            )
+            for r in results
+        ]
+    )
+
+
+@router.post("/api/admin/clear-cache")
+async def clear_all_cache():
+    """Clear all in-memory cache. For debugging purposes."""
+    from utils.cache import cache
+    await cache.clear()
+    return {"status": "success", "message": "All cache cleared"}
+
+
+@router.post("/api/admin/clear-cache/{ticker}")
+async def clear_cache_for_ticker(ticker: str):
+    """Clear cache for a specific ticker."""
+    from utils.cache import cache, CacheKeys
+    
+    # Clear all related cache keys
+    keys_to_clear = [
+        CacheKeys.ai_verdict(ticker),
+        CacheKeys.tweets(ticker),
+        CacheKeys.full_analysis(ticker),
+    ]
+    
+    for key in keys_to_clear:
+        await cache.delete(key)
+    
+    return {
+        "status": "success", 
+        "ticker": ticker.upper(),
+        "cleared_keys": keys_to_clear
+    }

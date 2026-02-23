@@ -42,22 +42,54 @@ def get_or_create_coin(
     return coin
 
 
+def _parse_tweet_date(date_str: str) -> datetime:
+    """Parse tweet date with multiple format support."""
+    if not date_str:
+        return datetime.utcnow()
+    
+    # 1. Try ISO format
+    try:
+        if isinstance(date_str, str):
+            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    
+    # 2. Try Nitter format: "Feb 20, 2026 · 11:56 AM UTC"
+    try:
+        clean = date_str.replace("UTC", "").strip()
+        for char in ["·", "•", "·", " · "]:
+            clean = clean.replace(char, " - ")
+        clean = " ".join(clean.split())
+        return datetime.strptime(clean, "%b %d, %Y - %I:%M %p")
+    except ValueError:
+        pass
+    
+    return datetime.utcnow()
+
+
 def save_tweets(db: Session, coin_id: int, tweets: list[dict]) -> int:
     """
     Save tweets to DB. Skips duplicates by tweet_id.
     Returns: number of new tweets saved.
     """
     saved_count = 0
+    seen_ids = set()
 
     for t in tweets:
-        # Check duplicate
-        existing = db.query(TweetRaw).filter_by(tweet_id=t["tweet_id"]).first()
+        tweet_id = t["tweet_id"]
+        
+        if tweet_id in seen_ids:
+            continue
+        seen_ids.add(tweet_id)
+
+        # Check duplicate in DB
+        existing = db.query(TweetRaw).filter_by(tweet_id=tweet_id).first()
         if existing:
             continue
 
         tweet_record = TweetRaw(
             coin_id=coin_id,
-            tweet_id=t["tweet_id"],
+            tweet_id=tweet_id,
             author_username=t["author_username"],
             author_name=t["author_name"],
             author_followers=t["author_followers"],
@@ -72,15 +104,8 @@ def save_tweets(db: Session, coin_id: int, tweets: list[dict]) -> int:
             language=t["language"],
             tweet_created_at=None,
         )
-        # Safe date parsing
-        try:
-            if t.get("tweet_created_at"):
-                tweet_record.tweet_created_at = datetime.fromisoformat(
-                    t["tweet_created_at"].replace("Z", "+00:00")
-                )
-        except ValueError:
-            logger.warning(f"Invalid date format in CRUD: {t['tweet_created_at']}")
-            tweet_record.tweet_created_at = datetime.utcnow()
+        # Safe date parsing with multiple formats
+        tweet_record.tweet_created_at = _parse_tweet_date(t.get("tweet_created_at"))
 
         db.add(tweet_record)
         saved_count += 1

@@ -1,52 +1,23 @@
-# scrapers/twitter_scraper.py — Twitter Scraper (CamoFox/Nitter + Apify fallback)
+# scrapers/twitter_scraper.py — Twitter Scraper via Apify actor (no Playwright)
 
 from apify_client import ApifyClient
-from config import APIFY_API_TOKEN
+from config import APIFY_API_TOKEN, APIFY_TWITTER_ACTOR_ID
 from typing import Optional
 import logging
-import asyncio
-import concurrent.futures
 from datetime import datetime
 import hashlib
 
 logger = logging.getLogger(__name__)
 
-# Thread pool for running async scraper in a separate thread
-# (avoids conflict with FastAPI's running event loop)
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-
-
-
-
-def _run_nitter_in_thread(query: str, limit: int) -> list[dict]:
-    """Run NitterScraper in a separate thread with its own event loop."""
-    import sys
-    from .nitter_scraper import NitterScraper
-
-    # Playwright requires ProactorEventLoop on Windows for subprocesses
-    if sys.platform == "win32":
-        loop = asyncio.ProactorEventLoop()
-    else:
-        loop = asyncio.new_event_loop()
-        
-    asyncio.set_event_loop(loop)
-    try:
-        scraper = NitterScraper()
-        return loop.run_until_complete(scraper.get_tweets(query, limit=limit))
-    finally:
-        loop.close()
-
 
 class TwitterScraper:
-    """
-    Twitter data scraper.
-    Priority: Nitter (free, Playwright) → Apify (paid fallback).
-    """
-
-    ACTOR_ID = "apidojo/twitter-scraper-lite"
+    """Twitter/X scraper using Apify actor only."""
 
     def __init__(self):
-        self.client = ApifyClient(APIFY_API_TOKEN)
+        self.actor_id = APIFY_TWITTER_ACTOR_ID
+        self.client = ApifyClient(APIFY_API_TOKEN) if APIFY_API_TOKEN else None
+        if not APIFY_API_TOKEN:
+            logger.warning("APIFY_API_TOKEN not configured - twitter scraping disabled")
 
     def scrape_by_ticker(
         self,
@@ -54,49 +25,19 @@ class TwitterScraper:
         max_tweets: int = 40,
         language: Optional[str] = None,
     ) -> list[dict]:
-        """
-        Scrape tweets related to a ticker symbol.
+        """Scrape tweets for a ticker/query using Apify actor."""
+        if not self.client:
+            return []
 
-        Strategy:
-        1. Try Nitter (free, via Playwright) — runs in a separate thread.
-        2. If Nitter fails, fall back to Apify (paid).
-        3. Normalize all results to a consistent format.
-        """
-        queries = [
-            f"${ticker}",   # Cashtag: $PEPE
-            f"#{ticker}",   # Hashtag: #PEPE
-        ]
+        queries = self._build_queries(ticker)
+        if not queries:
+            return []
 
-        # ── STEP 1: Try Nitter (Free) via Playwright ──
-        try:
-            combined_query = " OR ".join(queries)
-            logger.info(f"[Nitter/Playwright] Attempting scrape for: {combined_query}")
+        raw_items = self._fetch_from_apify(queries, max_tweets=max_tweets, language=language)
+        if not raw_items:
+            return []
 
-            # Run scraper in a separate thread to avoid event loop conflicts
-            future = _executor.submit(_run_nitter_in_thread, combined_query, max_tweets)
-            nitter_tweets = future.result(timeout=30)  # Reduced to 30s
-
-            if nitter_tweets:
-                logger.info(f"[Nitter] Got {len(nitter_tweets)} tweets.")
-                # Normalize format → standard format
-                normalized = self._normalize_nitter_tweets(nitter_tweets)
-                if normalized:
-                    return normalized[:max_tweets]
-
-            logger.warning("[Nitter] No usable tweets returned.")
-
-        except concurrent.futures.TimeoutError:
-            logger.error("[Nitter] Timed out after 30s.")
-        except Exception as e:
-            logger.error(f"[Nitter] Failed: {type(e).__name__}: {e}")
-
-        # ── STEP 2: Fallback to Apify (Paid) ──
-        # DISABLED: Apify free plan reached ($0.02 credit limit).
-        logger.info("[Apify] Fallback disabled (free plan limit). Skipping.")
-        all_tweets = []
-
-        # ── STEP 3: Normalize and return ──
-        normalized = self._normalize_apify_tweets(all_tweets)
+        normalized = self._normalize_apify_tweets(raw_items)
         deduplicated = self._deduplicate(normalized)
         deduplicated.sort(
             key=lambda t: t["like_count"] + t["retweet_count"],
@@ -104,93 +45,164 @@ class TwitterScraper:
         )
         return deduplicated[:max_tweets]
 
-    # ─────────────────────────────────────────────
-    # Normalization
-    # ─────────────────────────────────────────────
+    def _build_queries(self, ticker_or_query: str) -> list[str]:
+        """Build search queries from ticker or raw query input."""
+        raw = (ticker_or_query or "").strip()
+        if not raw:
+            return []
 
-    def _normalize_nitter_tweets(self, raw_items: list[dict]) -> list[dict]:
-        """Normalize X.com scraper output to our standard format."""
-        normalized = []
-        for item in raw_items:
+        if any(token in raw for token in [" OR ", " AND ", "from:", "since:", "until:", "(", ")"]):
+            return [raw]
+
+        base = raw.strip("$#")
+        if not base:
+            return []
+
+        queries = [f"${base}", f"#{base}", base]
+        return list(dict.fromkeys(queries))
+
+    def _fetch_from_apify(self, queries: list[str], max_tweets: int, language: Optional[str]) -> list[dict]:
+        """Run Apify actor with a few compatible input variants."""
+        input_variants = self._build_input_variants(queries, max_tweets, language)
+
+        for idx, run_input in enumerate(input_variants, start=1):
             try:
-                author = item.get("author", {}) or {}
-                text = item.get("text", "").strip()
-                if not text:
+                logger.info(f"[Apify] Run {idx}/{len(input_variants)} actor={self.actor_id} input_keys={list(run_input.keys())}")
+                run = self.client.actor(self.actor_id).call(run_input=run_input, timeout_secs=180)
+                if not run:
+                    logger.warning("[Apify] Empty run response")
                     continue
 
-                tweet_id = item.get("id", "")
-                if not tweet_id:
-                    # Fallback ID generation
-                    unique_str = f"{text}{author.get('name', '')}{item.get('createdAt', '')}"
-                    tweet_id = hashlib.md5(unique_str.encode()).hexdigest()
+                dataset_id = run.get("defaultDatasetId")
+                if not dataset_id:
+                    logger.warning("[Apify] No defaultDatasetId in run result")
+                    continue
 
-                tweet = {
-                    "tweet_id": tweet_id,
-                    "author_username": author.get("userName", "unknown"),
-                    "author_name": author.get("name", ""),
-                    "author_followers": int(author.get("followers", 0) or 0),
-                    "author_verified": bool(author.get("verified", False)),
-                    "full_text": text,
-                    "retweet_count": int(item.get("retweetCount", 0) or 0),
-                    "like_count": int(item.get("likeCount", 0) or 0),
-                    "reply_count": int(item.get("replyCount", 0) or 0),
-                    "quote_count": int(item.get("quoteCount", 0) or 0),
-                    "is_retweet": item.get("isRetweet", False),
-                    "is_quote": item.get("isQuote", False),
-                    "language": item.get("lang", "unknown"),
-                    "tweet_created_at": self._parse_nitter_date(item.get("timestamp") or item.get("createdAt")),
-                }
-                normalized.append(tweet)
+                items: list[dict] = []
+                for item in self.client.dataset(dataset_id).iterate_items():
+                    items.append(item)
+                    if len(items) >= max(50, max_tweets * 3):
+                        break
 
+                if items:
+                    logger.info(f"[Apify] Collected {len(items)} raw tweets")
+                    return items
+
+                logger.warning("[Apify] Run completed but returned no items")
             except Exception as e:
-                logger.warning(f"Failed to normalize tweet: {e}")
-                continue
+                logger.warning(f"[Apify] Run variant {idx} failed: {e}")
 
-        return normalized
+        return []
 
-    def _parse_nitter_date(self, date_str: str) -> str:
-        """Parse Nitter date format 'Feb 20, 2026 · 12:18 AM UTC' to ISO string."""
-        if not date_str:
-            return datetime.utcnow().isoformat() + "Z"
+    def _build_input_variants(self, queries: list[str], max_tweets: int, language: Optional[str]) -> list[dict]:
+        """Build several actor input schemas to maximize compatibility."""
+        max_items = max(1, min(max_tweets, 200))
+
+        variant_1 = {
+            "searchTerms": queries,
+            "maxItems": max_items,
+            "sort": "Latest",
+        }
+        if language:
+            variant_1["tweetLanguage"] = language
+
+        variant_2 = {
+            "queries": queries,
+            "maxItems": max_items,
+        }
+        if language:
+            variant_2["tweetLanguage"] = language
+
+        variant_3 = {
+            "query": " OR ".join(queries),
+            "maxItems": max_items,
+        }
+        if language:
+            variant_3["lang"] = language
+
+        return [variant_1, variant_2, variant_3]
+
+    def _to_int(self, value: object) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return 0
+
+        multiplier = 1
+        suffix = text[-1].lower()
+        if suffix == "k":
+            multiplier = 1_000
+            text = text[:-1]
+        elif suffix == "m":
+            multiplier = 1_000_000
+            text = text[:-1]
+        elif suffix == "b":
+            multiplier = 1_000_000_000
+            text = text[:-1]
+
         try:
-            # Check if already ISO
-            if "T" in date_str:
-                return date_str
-            
-            # Parse 'Feb 20, 2026 · 12:18 AM UTC'
-            # Remove 'UTC' and parse
-            clean_date = date_str.replace("UTC", "").strip()
-            # Handle '·' separator
-            if " · " in clean_date:
-                dt = datetime.strptime(clean_date, "%b %d, %Y · %I:%M %p")
-            else:
-                # Fallback or other formats
-                dt = datetime.utcnow()
-            
-            return dt.isoformat() + "Z"
-        except Exception as e:
-            logger.warning(f"Date parse error '{date_str}': {e}")
-            return datetime.utcnow().isoformat() + "Z"
+            return int(float(text) * multiplier)
+        except Exception:
+            return 0
 
     def _normalize_apify_tweets(self, raw_items: list[dict]) -> list[dict]:
         """Normalize Apify actor output to our standard format."""
         normalized = []
         for item in raw_items:
             try:
-                author = item.get("author", {}) or {}
+                author = item.get("author") or item.get("user") or {}
+                if not isinstance(author, dict):
+                    author = {}
+
+                text = (
+                    item.get("text")
+                    or item.get("full_text")
+                    or item.get("fullText")
+                    or item.get("tweetText")
+                    or ""
+                )
+                text = str(text).strip()
+                if not text:
+                    continue
+
+                author_username = (
+                    author.get("userName")
+                    or author.get("username")
+                    or author.get("screen_name")
+                    or author.get("handle")
+                    or item.get("authorUsername")
+                    or item.get("username")
+                    or "unknown"
+                )
+
+                tweet_created_at = (
+                    item.get("createdAt")
+                    or item.get("timestamp")
+                    or item.get("date")
+                    or datetime.utcnow().isoformat()
+                )
+
+                tweet_id = str(item.get("id") or item.get("tweetId") or item.get("tweet_id") or "")
+                if not tweet_id:
+                    unique_str = f"{text}|{author_username}|{tweet_created_at}"
+                    tweet_id = hashlib.md5(unique_str.encode()).hexdigest()
+
                 tweet = {
-                    "tweet_id": str(item.get("id", "")),
-                    "author_username": (
-                        author.get("userName")
-                        or author.get("username")
-                        or item.get("authorUsername", "unknown")
-                    ),
+                    "tweet_id": tweet_id,
+                    "author_username": author_username,
                     "author_name": (
                         author.get("name")
                         or author.get("displayName")
+                        or item.get("authorName")
                         or ""
                     ),
-                    "author_followers": int(
+                    "author_followers": self._to_int(
                         author.get("followers")
                         or author.get("followersCount")
                         or item.get("authorFollowers", 0)
@@ -198,25 +210,23 @@ class TwitterScraper:
                     "author_verified": bool(
                         author.get("isVerified")
                         or author.get("isBlueVerified")
+                        or author.get("verified")
+                        or item.get("authorVerified")
+                        or item.get("verified")
                         or False
                     ),
-                    "full_text": (
-                        item.get("text")
-                        or item.get("full_text")
-                        or item.get("fullText", "")
-                    ),
-                    "retweet_count": int(item.get("retweetCount", 0)),
-                    "like_count": int(item.get("likeCount", 0)),
-                    "reply_count": int(item.get("replyCount", 0)),
-                    "quote_count": int(item.get("quoteCount", 0)),
-                    "is_retweet": bool(item.get("isRetweet", False)),
-                    "is_quote": bool(item.get("isQuote", False)),
-                    "language": item.get("lang", "unknown"),
-                    "tweet_created_at": item.get("createdAt"),
+                    "full_text": text,
+                    "retweet_count": self._to_int(item.get("retweetCount") or item.get("retweets") or item.get("retweet_count")),
+                    "like_count": self._to_int(item.get("likeCount") or item.get("favoriteCount") or item.get("likes")),
+                    "reply_count": self._to_int(item.get("replyCount") or item.get("replies")),
+                    "quote_count": self._to_int(item.get("quoteCount") or item.get("quotes")),
+                    "is_retweet": bool(item.get("isRetweet") or item.get("retweeted") or False),
+                    "is_quote": bool(item.get("isQuote") or item.get("quoted") or False),
+                    "language": item.get("lang") or item.get("language") or "unknown",
+                    "tweet_created_at": tweet_created_at,
                 }
 
-                if tweet["full_text"].strip():
-                    normalized.append(tweet)
+                normalized.append(tweet)
 
             except Exception as e:
                 logger.warning(f"Failed to normalize Apify tweet: {e}")

@@ -1,4 +1,4 @@
-# api/schemas.py — Pydantic request/response models
+# api/schemas.py — Pydantic request/response models (v3.0)
 
 from pydantic import BaseModel, Field
 from typing import Optional, Any
@@ -6,13 +6,7 @@ from datetime import datetime
 
 
 class AnalyzeRequest(BaseModel):
-    """Request to analyze a coin.
-
-    Supports two inputs:
-    1. Ticker only:             {"ticker": "BONK"}
-    2. Contract address only:   {"ticker": "DezXAZ8z7Pn..."}  → auto-detected
-    3. Both:                    {"ticker": "BONK", "contract_address": "DezX..."}
-    """
+    """Request to analyze a coin."""
     ticker: str = Field(
         ..., min_length=1, max_length=50,
         description="Coin symbol (e.g. PEPE) or Solana contract address"
@@ -26,11 +20,81 @@ class AnalyzeRequest(BaseModel):
 
 
 class ScoreBreakdown(BaseModel):
-    social_score: int
-    bot_score: int
-    sentiment_score: int
-    holder_score: int
-    ai_trust_score: Optional[int] = None
+    """Individual component scores."""
+    # Social (15%)
+    social_score: int = Field(default=50, ge=0, le=100)
+    bot_score: int = Field(default=50, ge=0, le=100)
+    sentiment_score: int = Field(default=50, ge=0, le=100)
+    
+    # On-Chain (30%)
+    holder_score: int = Field(default=50, ge=0, le=100)
+    security_score: Optional[int] = Field(default=50, ge=0, le=100)
+    
+    # Technical (55%)
+    momentum_score: Optional[int] = Field(default=50, ge=0, le=100)
+    volume_score: Optional[int] = Field(default=50, ge=0, le=100)
+    liquidity_score: Optional[int] = Field(default=50, ge=0, le=100)
+    
+    # AI
+    ai_trust_score: Optional[int] = Field(default=None, ge=0, le=100)
+
+
+class ComponentDetail(BaseModel):
+    """Detail for a single component."""
+    score: int = Field(default=50, ge=0, le=100)
+    weight: str = "0%"
+    details: list[str] = Field(default_factory=list)
+
+
+class TechnicalComponents(BaseModel):
+    """Technical analysis components (55% weight)."""
+    momentum: Optional[ComponentDetail] = None
+    volume: Optional[ComponentDetail] = None
+    trade_pressure: Optional[ComponentDetail] = None
+    liquidity: Optional[ComponentDetail] = None
+
+
+class OnChainComponents(BaseModel):
+    """On-chain analysis components (30% weight)."""
+    holder: Optional[ComponentDetail] = None
+    security: Optional[ComponentDetail] = None
+    whale_risk: Optional[ComponentDetail] = None
+
+
+class SocialComponents(BaseModel):
+    """Social analysis components (15% weight)."""
+    community: Optional[ComponentDetail] = None
+    bot_detect: Optional[ComponentDetail] = None
+
+
+class CategoryBreakdown(BaseModel):
+    """Breakdown for a category (technical/onchain/social)."""
+    total: float = 0
+    weight: str = "0%"
+    components: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExtendedBreakdown(BaseModel):
+    """Extended breakdown for v3.0 UI."""
+    technical: Optional[CategoryBreakdown] = None
+    onchain: Optional[CategoryBreakdown] = None
+    social: Optional[CategoryBreakdown] = None
+
+
+class TechnicalSignals(BaseModel):
+    """Technical indicators from analysis."""
+    rsi: Optional[float] = None
+    rsi_signal: Optional[str] = None
+    divergence: Optional[str] = None
+    trend: Optional[str] = None
+    buy_sell_ratio: Optional[float] = None
+
+
+class SignalsSummary(BaseModel):
+    """Bullish/Bearish/Neutral signals."""
+    bullish: list[str] = Field(default_factory=list)
+    bearish: list[str] = Field(default_factory=list)
+    neutral: list[str] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):
@@ -40,25 +104,34 @@ class AnalyzeResponse(BaseModel):
 
     # Main scores
     overall_score: int = Field(..., ge=0, le=100)
-    risk_level: str       # LOW / MEDIUM / HIGH / EXTREME / MOON
+    trust_score: int = Field(..., ge=0, le=100)
+    risk_level: str  # LOW / MEDIUM / HIGH / EXTREME / MOON / AVOID
 
-    # Breakdown
+    # Score breakdowns
     scores: ScoreBreakdown
-    verdict: str          # Short judgment sentence
-    red_flags: list[str]
-    green_flags: list[str]
+    breakdown: Optional[dict[str, Any]] = None  # Extended breakdown
+    
+    # Signals
+    signals: Optional[SignalsSummary] = None
+    technical_indicators: Optional[TechnicalSignals] = None
+    
+    # Verdict & Flags
+    verdict: str
+    red_flags: list[str] = Field(default_factory=list)
+    green_flags: list[str] = Field(default_factory=list)
 
     # Verification
-    tx_hash: Optional[str] = None       # OpenGradient proof
-    verify_url: Optional[str] = None    # Link to check proof on explorer
+    tx_hash: Optional[str] = None
+    verify_url: Optional[str] = None
 
     # Metadata
-    tweets_analyzed: int
+    tweets_analyzed: int = 0
     analyzed_at: datetime
     cached: bool = False
     opengradient_used: bool = False
     algorithm_notes: list[str] = Field(default_factory=list)
     data_sources: dict[str, Any] = Field(default_factory=dict)
+    force_refresh: bool = False
 
 
 class ErrorResponse(BaseModel):

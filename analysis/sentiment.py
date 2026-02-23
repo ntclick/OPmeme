@@ -30,6 +30,17 @@ NEGATIVE_KEYWORDS = {
     "🔴", "💀", "☠️", "🚨", "⚠️",
 }
 
+# Compiled regex patterns for word boundary matching
+POSITIVE_PATTERN = re.compile(
+    r'\b(' + '|'.join(re.escape(kw) for kw in POSITIVE_KEYWORDS) + r')\b',
+    re.IGNORECASE
+)
+
+NEGATIVE_PATTERN = re.compile(
+    r'\b(' + '|'.join(re.escape(kw) for kw in NEGATIVE_KEYWORDS) + r')\b',
+    re.IGNORECASE
+)
+
 
 def calculate_sentiment_score(tweets: list[dict]) -> dict:
     """
@@ -54,11 +65,11 @@ def calculate_sentiment_score(tweets: list[dict]) -> dict:
     neutral_count = 0
 
     for tweet in tweets:
-        text = tweet["full_text"].lower()
+        text = tweet["full_text"]
 
-        # Count keyword matches
-        pos_matches = sum(1 for kw in POSITIVE_KEYWORDS if kw in text)
-        neg_matches = sum(1 for kw in NEGATIVE_KEYWORDS if kw in text)
+        # Count keyword matches using word boundaries
+        pos_matches = len(POSITIVE_PATTERN.findall(text))
+        neg_matches = len(NEGATIVE_PATTERN.findall(text))
 
         # Determine per-tweet sentiment (0–100)
         if pos_matches + neg_matches == 0:

@@ -1,0 +1,85 @@
+# analysis/liquidity_analyzer.py — Liquidity Analysis v3.0 (Birdeye-based)
+
+from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class LiquidityAnalyzer:
+    """
+    Calculate Liquidity Depth Score (10% of final score).
+    """
+    
+    def calculate_liquidity_score(
+        self,
+        birdeye_data: dict,
+        holder_data: dict
+    ) -> dict:
+        """
+        4. Liquidity Depth Score (10% weight)
+        """
+        result = {
+            "liquidity_score": 50,
+            "liquidity_usd": 0,
+            "liquidity_mcap_ratio": 0,
+            "lp_status": "UNKNOWN",
+            "details": []
+        }
+        
+        if not birdeye_data:
+            return result
+            
+        liquidity = birdeye_data.get("liquidity", 0) or 0
+        market_cap = birdeye_data.get("market_cap", 1) or 1
+        liq_change = birdeye_data.get("liquidity_change_24h", 0) or 0
+        
+        result["liquidity_usd"] = liquidity
+        
+        # 1. Liquidity USD (50%)
+        if liquidity >= 5_000_000: score_usd, msg_usd = 100, "🟢 Excellent - safe to trade large"
+        elif liquidity >= 1_000_000: score_usd, msg_usd = 90, "🟢 Very good liquidity"
+        elif liquidity >= 500_000: score_usd, msg_usd = 80, "🟢 Good liquidity"
+        elif liquidity >= 200_000: score_usd, msg_usd = 70, "🟢 Adequate liquidity"
+        elif liquidity >= 100_000: score_usd, msg_usd = 55, "🟡 Moderate - watch slippage"
+        elif liquidity >= 50_000: score_usd, msg_usd = 40, "🟡 Low - high slippage risk"
+        elif liquidity >= 20_000: score_usd, msg_usd = 25, "🔴 Very low - significant slippage"
+        elif liquidity >= 10_000: score_usd, msg_usd = 15, "🔴 Micro liquidity"
+        else: score_usd, msg_usd = 5, "🔴 CRITICAL - no exit possible"
+        
+        result["details"].append(f"Depth: {msg_usd} (${liquidity:,.0f})")
+        
+        # 2. Liquidity / MCap Ratio (30%)
+        ratio = liquidity / market_cap if market_cap > 0 else 0
+        result["liquidity_mcap_ratio"] = round(ratio, 4)
+        
+        if ratio >= 0.20: score_ratio, msg_ratio = 100, "🟢 Extremely healthy"
+        elif ratio >= 0.10: score_ratio, msg_ratio = 90, "🟢 Very healthy"
+        elif ratio >= 0.05: score_ratio, msg_ratio = 75, "🟢 Healthy"
+        elif ratio >= 0.03: score_ratio, msg_ratio = 60, "🟡 Acceptable"
+        elif ratio >= 0.01: score_ratio, msg_ratio = 40, "🟡 Low ratio"
+        elif ratio >= 0.005: score_ratio, msg_ratio = 25, "🔴 Poor ratio"
+        else: score_ratio, msg_ratio = 10, "🔴 RUG RISK - can't exit"
+        
+        result["details"].append(f"Ratio: {msg_ratio} ({ratio*100:.1f}%)")
+        
+        # 3. Liquidity Change 24h (20%)
+        if liq_change > 50: score_change = 90
+        elif liq_change >= 20: score_change = 80
+        elif liq_change >= 0: score_change = 60
+        elif liq_change >= -10: score_change = 45
+        elif liq_change >= -30: score_change = 30
+        else: score_change = 10
+        
+        # Final Score Calculation
+        final_score = int((score_usd * 0.50) + (score_ratio * 0.30) + (score_change * 0.20))
+        result["liquidity_score"] = max(0, min(100, final_score))
+        
+        # Extract LP Status just for frontend reference
+        if holder_data:
+            lp_burned = holder_data.get("lp_burned_pct")
+            lp_locked = holder_data.get("liquidity_locked")
+            if lp_burned and lp_burned > 90: result["lp_status"] = "BURNED"
+            elif lp_locked: result["lp_status"] = "LOCKED"
+        
+        return result

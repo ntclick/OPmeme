@@ -7,6 +7,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _normalize_text(text: str) -> str:
+    """Normalize text for duplicate detection."""
+    text = re.sub(r'https?://\S+', '', text)  # Remove URLs
+    text = re.sub(r'@\w+', '', text)          # Remove mentions
+    text = re.sub(r'#\w+', '', text)          # Remove hashtags
+    text = re.sub(r'\s+', ' ', text)          # Collapse whitespace
+    return text.strip().lower()
+
 def calculate_bot_score(tweets: list[dict]) -> dict:
     """
     Detect bot/spam activity.  Score 0-100  (high = FEW bots = GOOD).
@@ -26,10 +34,11 @@ def calculate_bot_score(tweets: list[dict]) -> dict:
     patterns_found: list[str] = []
 
     # --- 1. Duplicate Content (40%) ---
-    texts = [t["full_text"].strip().lower() for t in tweets]
+    texts = [_normalize_text(t["full_text"]) for t in tweets]
     text_counts: dict[str, int] = {}
     for text in texts:
-        text_counts[text] = text_counts.get(text, 0) + 1
+        if text: # Ignore fully empty texts after norm
+            text_counts[text] = text_counts.get(text, 0) + 1
 
     duplicates = sum(count - 1 for count in text_counts.values() if count > 1)
     duplicate_pct = duplicates / len(tweets) if tweets else 0

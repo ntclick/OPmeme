@@ -1,0 +1,49 @@
+INFO:analysis.opengradient:OpenGradient SDK initialized — key: 0xfc17...5c22
+INFO:analysis.opengradient:Initializing LangChain ReAct Agent...
+INFO:httpx:HTTP Request: POST https://llm.opengradient.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:analysis.opengradient:OpenGradient raw response object: TextGenerationOutput(transaction_hash='external', finish_reason='stop', chat_output={'content': '{\n  "ai_trust_score": 45,\n  "ai_sentiment_score": 50,\n  "verdict": "This $PENGUIN is waddling in the middle of the pack. No tweets means no chirps from the community, leaving us in the dark. Could be a sneaky rug or just a shy bird.",\n  "red_flags": ["Mint authority status unknown", "No freeze authority", "No real tweet data available"],\n  "green_flags": ["Balanced pre-computed scores"],\n  "bot_likelihood": "MEDIUM",\n  "recommendation": "DYOR",\n  "scoring_rationale": "With no tweet data and unknown mint authority status, the trust score is capped at 45 due to potential risks.",\n  "twitter_real": false,\n  "onchain_real": true\n}', 'role': 'assistant'}, completion_output=None, payment_hash=None)
+INFO:analysis.opengradient:OpenGradient chat_output: {'content': '{\n  "ai_trust_score": 45,\n  "ai_sentiment_score": 50,\n  "verdict": "This $PENGUIN is waddling in the middle of the pack. No tweets means no chirps from the community, leaving us in the dark. Could be a sneaky rug or just a shy bird.",\n  "red_flags": ["Mint authority status unknown", "No freeze authority", "No real tweet data available"],\n  "green_flags": ["Balanced pre-computed scores"],\n  "bot_likelihood": "MEDIUM",\n  "recommendation": "DYOR",\n  "scoring_rationale": "With no tweet data and unknown mint authority status, the trust score is capped at 45 due to potential risks.",\n  "twitter_real": false,\n  "onchain_real": true\n}', 'role': 'assistant'}
+INFO:analysis.opengradient:✅ [OPENGRADIENT] Agent Inference Success
+
+INFO:utils.cache:Cache SET: ai_verdict:PENGUIN (TTL: 1800s)
+INFO:analysis.opengradient:AI verdict cached for PENGUIN (TTL: 1800s)
+Agent Result:
+{'ai_result': {'ai_sentiment_score': 50,
+               'ai_trust_score': 45,
+               'bot_likelihood': 'MEDIUM',
+               'green_flags': ['Balanced pre-computed scores'],
+               'onchain_real': True,
+               'recommendation': 'DYOR',
+               'red_flags': ['Mint authority status unknown',
+                             'No freeze authority',
+                             'No real tweet data available'],
+               'scoring_rationale': 'With no tweet data and unknown mint '
+                                    'authority status, the trust score is '
+                                    'capped at 45 due to potential risks.',
+               'twitter_real': False,
+               'verdict': 'This $PENGUIN is waddling in the middle of the '
+                          'pack. No tweets means no chirps from the community, '
+                          'leaving us in the dark. Could be a sneaky rug or '
+                          'just a shy bird.'},
+ 'model_cid': None,
+ 'model_used': 'LangChain ReAct',
+ 'raw_output': '{\n'
+               '  "ai_trust_score": 45,\n'
+               '  "ai_sentiment_score": 50,\n'
+               '  "verdict": "This $PENGUIN is waddling in the middle of the '
+               'pack. No tweets means no chirps from the community, leaving us '
+               'in the dark. Could be a sneaky rug or just a shy bird.",\n'
+               '  "red_flags": ["Mint authority status unknown", "No freeze '
+               'authority", "No real tweet data available"],\n'
+               '  "green_flags": ["Balanced pre-computed scores"],\n'
+               '  "bot_likelihood": "MEDIUM",\n'
+               '  "recommendation": "DYOR",\n'
+               '  "scoring_rationale": "With no tweet data and unknown mint '
+               'authority status, the trust score is capped at 45 due to '
+               'potential risks.",\n'
+               '  "twitter_real": false,\n'
+               '  "onchain_real": true\n'
+               '}',
+ 'transaction_hash': None,
+ 'tx_hash': None,
+ 'used_opengradient': True}

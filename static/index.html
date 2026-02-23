@@ -1,856 +1,925 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CoinCheckGo - Scan Meme Coins, Detect Scams</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <script>
-        // Keep Play CDN for this static MVP UI, but silence its production warning noise.
-        (function () {
-            const originalWarn = console.warn;
-            console.warn = function (...args) {
-                const first = args[0];
-                if (typeof first === 'string' && first.includes('cdn.tailwindcss.com should not be used in production')) {
-                    return;
-                }
-                return originalWarn.apply(console, args);
-            };
-        })();
-    </script>
+    <title>CoinCheckGo - Solana Token AI Auditor</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
-        rel="stylesheet">
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-        body {
-            font-family: 'Space Grotesk', sans-serif;
-        }
-
-        /* Cyberpunk / Degen Glass Effect */
-        .glass-panel {
-            background: rgba(10, 10, 15, 0.7);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-        }
-
-        .glass-panel:hover {
-            border-color: rgba(255, 255, 255, 0.15);
-            box-shadow: 0 8px 32px 0 rgba(0, 255, 163, 0.1);
-        }
-
-        .score-circle {
-            background: conic-gradient(var(--score-color) var(--score-pct), #1f2937 0deg);
-            transition: all 1s ease-out;
-        }
-
-        .animate-glow {
-            animation: pulse-glow 2s infinite;
-        }
-
-        @keyframes pulse-glow {
-
-            0%,
-            100% {
-                box-shadow: 0 0 10px var(--glow-color);
-            }
-
-            50% {
-                box-shadow: 0 0 25px var(--glow-color);
-            }
-        }
-
-        .fade-in-up {
-            animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .no-scrollbar::-webkit-scrollbar {
-            display: none;
-        }
-
-        .no-scrollbar {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-        }
-
-        /* Neon Text Utilities */
-        .text-neon-green {
-            color: #00FFA3;
-            text-shadow: 0 0 10px rgba(0, 255, 163, 0.5);
-        }
-
-        .text-neon-red {
-            color: #FF3B30;
-            text-shadow: 0 0 10px rgba(255, 59, 48, 0.5);
-        }
-
-        /* Background Grid */
-        .bg-grid {
-            background-size: 40px 40px;
-            background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-        }
-    </style>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
-                        bg: '#050505',
-                        card: '#0F0F12',
-                        primary: '#00FFA3', // Neon Green
-                        danger: '#FF3B30',
-                        warning: '#FFCC00',
-                        muted: '#6B7280'
+                        primary: '#00ff9d',
+                        secondary: '#9d00ff',
+                        dark: '#0a0a0a',
+                        darker: '#050505',
+                        panel: '#111111'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'spin-slow': 'spin 4s linear infinite',
+                        'float': 'float 6s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
                     }
                 }
             }
         }
     </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #050505;
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(0, 255, 157, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 85% 30%, rgba(157, 0, 255, 0.05) 0%, transparent 50%);
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+
+        .glass-panel {
+            background: rgba(17, 17, 17, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .neon-border {
+            position: relative;
+        }
+
+        .neon-border::before {
+            content: '';
+            position: absolute;
+            top: -1px; left: -1px; right: -1px; bottom: -1px;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(45deg, #00ff9d, transparent, #9d00ff);
+            mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            mask-composite: exclude;
+            -webkit-mask-composite: xor;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .gradient-text {
+            background: linear-gradient(to right, #ffffff, #a0a0a0);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .score-circle {
+            position: relative;
+            width: 160px;
+            height: 160px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: conic-gradient(from 0deg, var(--score-color) var(--score-deg), rgba(255,255,255,0.05) var(--score-deg));
+        }
+
+        .score-circle::before {
+            content: '';
+            position: absolute;
+            inset: 8px;
+            border-radius: 50%;
+            background: #0a0a0a;
+            z-index: 1;
+        }
+
+        .score-content {
+            position: relative;
+            z-index: 2;
+            text-align: center;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #050505; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .search-input {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            transition: all 0.3s ease;
+        }
+        .search-input:focus {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: #00ff9d;
+            box-shadow: 0 0 15px rgba(0, 255, 157, 0.1);
+            outline: none;
+        }
+
+        /* Autosuggest Dropdown */
+        .suggestions-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #111;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-top: none;
+            border-radius: 0 0 12px 12px;
+            z-index: 50;
+            max-height: 250px;
+            overflow-y: auto;
+            display: none;
+        }
+        .suggestions-dropdown.show {
+            display: block;
+        }
+        .suggestion-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .suggestion-item:last-child {
+            border-bottom: none;
+        }
+        .suggestion-item:hover, .suggestion-item.active {
+            background: rgba(0, 255, 157, 0.1);
+        }
+    </style>
 </head>
 
-<body
-    class="bg-bg text-white min-h-screen flex flex-col items-center relative overflow-x-hidden selection:bg-primary/30 bg-grid">
-
-    <!-- Navbar -->
-    <nav class="w-full max-w-6xl p-6 flex justify-between items-center z-10">
-        <div class="flex items-center gap-3 cursor-pointer group" onclick="location.reload()">
-            <div class="relative">
-                <i data-lucide="scan-eye"
-                    class="text-primary w-8 h-8 relative z-10 group-hover:rotate-12 transition duration-300"></i>
-                <div
-                    class="absolute inset-0 bg-primary/40 blur-lg opacity-0 group-hover:opacity-100 transition duration-300">
+<body class="antialiased selection:bg-primary selection:text-black">
+    
+    <!-- Top Navigation -->
+    <nav class="w-full border-b border-white/5 bg-black/50 backdrop-blur-md sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2 cursor-pointer" onclick="resetUI()">
+                <div class="w-8 h-8 rounded bg-gradient-to-br from-primary to-emerald-600 flex items-center justify-center shadow-[0_0_15px_rgba(0,255,157,0.3)]">
+                    <i data-lucide="shield" class="w-5 h-5 text-black"></i>
+                </div>
+                <span class="font-bold text-xl tracking-tight">CoinCheck<span class="text-primary">Go</span></span>
+            </div>
+            
+            <div class="hidden md:flex items-center gap-6 text-sm text-gray-400 font-medium">
+                <button onclick="toggleLanguage()" id="langToggleBtn" class="px-2 py-1 rounded border border-white/10 hover:border-primary/50 transition">🇻🇳 VN</button>
+                <a href="#" id="navFeatures" class="hover:text-white transition">Features</a>
+                <a href="#" id="navTrending" class="hover:text-white transition">Trending</a>
+                <div class="flex items-center gap-1 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
+                    <i data-lucide="cpu" class="w-4 h-4 text-secondary"></i>
+                    <span class="text-gray-300">OpenGradient AI</span>
                 </div>
             </div>
-            <h1 class="text-2xl font-bold tracking-tight">CoinCheck<span class="text-primary">Go</span></h1>
-        </div>
-        <div class="hidden md:flex gap-8 text-sm font-medium text-gray-400 items-center">
-            <a href="#" class="hover:text-primary transition">Trending</a>
-            <a href="https://aibuildmypc.com/ai-builder" target="_blank" class="hover:text-primary transition">AI PC
-                Builder</a>
-            <button
-                class="bg-white/5 border border-white/10 px-5 py-2 rounded-lg hover:bg-white/10 hover:border-primary/50 text-white transition font-semibold">
-                Connect Wallet
-            </button>
         </div>
     </nav>
 
     <!-- Main Content -->
-    <main class="w-full max-w-4xl flex-1 flex flex-col items-center px-4 mt-8 mb-20 z-10">
-
-        <!-- Hero Section -->
-        <div class="text-center mb-12 animate-fade-in-up">
-            <div
-                class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-bold mb-4">
+    <main class="max-w-5xl mx-auto px-6 py-12 flex flex-col items-center min-h-[calc(100vh-64px)]">
+        
+        <!-- Hero Section (Visible initially) -->
+        <div id="hero" class="text-center w-full max-w-3xl mt-12 mb-16 animate-fade-in">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-mono mb-6">
                 <span class="relative flex h-2 w-2">
-                    <span
-                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
                 </span>
-                LIVE SCANNER ACTIVE
+                v3.1 Technical Focus
             </div>
-            <h2 class="text-5xl md:text-7xl font-bold mb-4 tracking-tight">
-                Scan Meme Coins, <br />
-                <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-500">Detect
-                    Scams.</span>
+            <h1 class="text-5xl md:text-7xl font-bold mb-6 tracking-tight leading-tight">
+                <span id="heroTitle1">Don't Buy </span><span id="heroTitleTrash" class="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-500">Trash</span>.
+            </h1>
+            <h2 class="text-3xl md:text-4xl font-semibold mb-6 text-gray-300">
+                <span id="heroTitle2">Buy </span><span id="heroTitleAlpha" class="text-transparent bg-clip-text bg-gradient-to-r from-primary to-emerald-400">Alpha</span><span id="heroTitleAvoid">. Avoid </span> 
+                <span class="inline-block relative">
+                    <span id="heroTitleRugs" class="relative z-10 text-red-400">Rugs</span>
+                    <span class="absolute bottom-1 left-0 w-full h-2 bg-red-500/20 -z-10 -rotate-2"></span>
+                </span> <span id="heroTitleScams" class="text-gray-500 line-through decoration-red-500/50 decoration-2"> & Scams.</span>
             </h2>
-            <p class="text-gray-400 max-w-xl mx-auto text-lg">
-                AI-powered audit for Solana tokens. Social sentiment & on-chain analysis verified by OpenGradient.
+            <p id="heroDesc" class="text-gray-400 max-w-xl mx-auto text-lg">
+                Technical & On-Chain Analysis powered by OpenGradient AI. Real-time auditing for Solana tokens.
             </p>
         </div>
 
         <!-- Search Box -->
-        <div
-            class="w-full glass-panel p-2 rounded-xl flex items-center gap-2 mb-12 relative group z-20 transition-all duration-300 focus-within:ring-2 focus-within:ring-primary/50 shadow-2xl">
-            <div class="relative w-full flex rounded-lg overflow-hidden bg-black/20">
-                <span class="pl-6 pr-2 py-5 text-gray-500 font-bold text-xl">$</span>
-                <input type="text" id="tickerInput" placeholder="Token name or contract address..."
-                    class="w-full bg-transparent text-xl font-bold outline-none placeholder-gray-700 text-white tracking-wide"
-                    onkeydown="if(event.key === 'Enter') analyzeCoin()">
-                <button onclick="analyzeCoin()" id="analyzeBtn"
-                    class="bg-primary text-black font-bold px-8 rounded-lg hover:bg-green-400 transition duration-300 flex items-center gap-2 m-1">
-                    <span>CHECK</span>
-                    <i data-lucide="arrow-right" class="w-5 h-5"></i>
-                </button>
+        <div class="w-full max-w-2xl relative z-40" id="searchContainer">
+            <div class="relative group">
+                <div class="absolute -inset-1 bg-gradient-to-r from-primary to-secondary rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-500"></div>
+                <div class="relative flex items-center glass-panel rounded-xl p-2">
+                    <i data-lucide="search" class="w-6 h-6 text-gray-400 ml-3"></i>
+                    <input type="text" id="tickerInput" 
+                        class="w-full bg-transparent border-none text-xl text-white px-4 py-3 focus:outline-none placeholder-gray-600 font-mono"
+                        placeholder="Enter token symbol or contract address..."
+                        autocomplete="off" spellcheck="false">
+                    <button id="analyzeBtn" onclick="analyzeToken()" 
+                        class="bg-white text-black hover:bg-primary transition-colors px-6 py-3 rounded-lg font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+                        <span id="btnAuditText">Audit Token</span>
+                        <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                
+                <!-- Suggestions Dropdown -->
+                <div id="suggestionsBox" class="suggestions-dropdown glass-panel"></div>
             </div>
-        </div>
-
-        <!-- Trending Section (Dynamic) -->
-        <div class="w-full mb-16 animate-fade-in-up" style="animation-delay: 0.1s;">
-            <div class="flex items-center justify-between mb-4 px-1">
-                <h3 class="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-                    <i data-lucide="flame" class="w-3 h-3 text-orange-500"></i> Trending
-                </h3>
-                <span class="text-[10px] text-gray-600">Updated 1m ago</span>
-            </div>
-            <div id="trendingGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <!-- Skeletons -->
-                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
-                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
-                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
-                <div class="glass-panel h-16 rounded-lg animate-pulse bg-gray-800/30"></div>
+            
+            <!-- Trending tags below search -->
+            <div class="flex flex-wrap items-center justify-center gap-2 mt-6 text-sm" id="trendingTags">
+                <span id="trendingLabelText" class="text-gray-500 font-medium mr-2">Trending:</span>
+                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" onclick="setTicker('BONK')">$BONK</span>
+                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" onclick="setTicker('WIF')">$WIF</span>
+                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" onclick="setTicker('POPCAT')">$POPCAT</span>
             </div>
         </div>
 
         <!-- Loading State -->
-        <div id="loading" class="hidden flex-col items-center gap-8 py-12 w-full">
-            <div class="relative">
-                <div class="w-24 h-24 border-t-4 border-l-4 border-primary rounded-full animate-spin"></div>
-                <div class="absolute inset-0 flex items-center justify-center">
-                    <i data-lucide="radar" class="w-8 h-8 text-primary animate-pulse"></i>
-                </div>
+        <div id="loading" class="hidden w-full max-w-md mt-16 flex-col items-center justify-center text-center">
+            <div class="relative w-24 h-24 mb-8">
+                <div class="absolute inset-0 border-4 border-white/10 rounded-full"></div>
+                <div class="absolute inset-0 border-4 border-primary rounded-full border-t-transparent animate-spin"></div>
+                <i data-lucide="cpu" class="absolute inset-0 m-auto w-8 h-8 text-primary animate-pulse"></i>
             </div>
-            <div class="text-center space-y-3">
-                <h3 class="text-2xl font-bold text-white tracking-tight" id="loadingTitle">Scanning Network...</h3>
+            <div class="space-y-4 w-full glass-panel p-6 rounded-xl border border-white/10">
+                <h3 id="loadingTitleText" class="text-2xl font-bold text-white tracking-tight">Analyzing Token...</h3>
                 <div class="flex flex-col gap-2 text-sm text-gray-400 font-mono" id="loadingSteps">
-                    <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
-                        <i data-lucide="twitter" class="w-3.5 h-3.5"></i>
-                        <span>Checking on Twitter — $symbol & contract mentions</span>
+                    <div class="flex items-center gap-2 justify-center text-primary opacity-100 transition-all duration-500 transform scale-100">
+                        <i data-lucide="activity" class="w-3.5 h-3.5"></i>
+                        <span id="step1Text">Gathering Technical & On-chain data</span>
                     </div>
                     <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
-                        <i data-lucide="link" class="w-3.5 h-3.5"></i>
-                        <span>Fetching on-chain data — holders, liquidity, transfers</span>
+                        <i data-lucide="bar-chart-2" class="w-3.5 h-3.5"></i>
+                        <span id="step2Text">Calculating Momentum & Volume metrics</span>
                     </div>
                     <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
-                        <i data-lucide="bot" class="w-3.5 h-3.5"></i>
-                        <span>Analyzing bot patterns & wash trading clusters</span>
+                        <i data-lucide="shield" class="w-3.5 h-3.5"></i>
+                        <span id="step3Text">Analyzing Security & Whale risk</span>
                     </div>
                     <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
                         <i data-lucide="brain" class="w-3.5 h-3.5"></i>
-                        <span>OpenGradient AI verifying — generating trust score on-chain</span>
+                        <span id="step4Text">OpenGradient AI verifying models on-chain</span>
                     </div>
                     <div class="flex items-center gap-2 justify-center opacity-30 transition-all duration-500">
-                        <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
-                        <span>Compiling final audit report</span>
+                        <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>
+                        <span id="step5Text">Finalizing AI Audit Report</span>
+                    </div>
+                </div>
+                
+                <!-- Detailed Status Log -->
+                <div id="statusLogContainer" class="mt-6 px-4 py-3 bg-black/40 rounded-lg border border-white/10 max-w-md mx-auto">
+                    <div class="text-xs text-gray-500 mb-2 uppercase tracking-wider font-bold">Status Log</div>
+                    <div id="statusLogText" class="text-xs font-mono text-gray-300 leading-relaxed h-20 overflow-y-auto">
+                        Initializing analysis...
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ANALYSIS DASHBOARD (Result Section) -->
-        <div id="result" class="hidden w-full space-y-6 fade-in-up">
-
-            <!-- 1. TRUST SCORE HEADER -->
-            <div class="glass-panel rounded-2xl p-6 md:p-8 relative overflow-hidden group">
-                <div
-                    class="absolute top-0 right-0 w-96 h-96 bg-primary/5 rounded-full blur-[100px] pointer-events-none">
+        <!-- Results Dashboard -->
+        <div id="result" class="hidden w-full mt-12 animate-fade-in pb-20">
+            
+            <!-- Header Card -->
+            <div class="glass-panel p-8 rounded-2xl mb-6 relative overflow-hidden neon-border">
+                <div class="absolute top-0 right-0 p-3 bg-white/5 rounded-bl-2xl font-mono text-xs text-gray-400 border-l border-b border-white/10 z-10" id="contractAddressDisplay">
+                    <span id="contractLabel">Contract: </span><span class="text-white select-all">--</span>
                 </div>
-
-                <div class="flex flex-col md:flex-row gap-8 md:gap-12 items-center">
-                    <!-- Gauge Chart -->
-                    <div class="relative w-48 h-48 flex-shrink-0">
-                        <div id="scoreCircle"
-                            class="w-full h-full rounded-full score-circle flex items-center justify-center shadow-[0_0_30px_rgba(0,0,0,0.5)]"
-                            style="--score-color: #00FFA3; --score-pct: 0%;">
-                            <div
-                                class="w-40 h-40 bg-[#0F0F12] rounded-full flex flex-col items-center justify-center border border-white/5">
-                                <span id="scoreValue" class="text-6xl font-bold text-white tracking-tighter">--</span>
-                                <span class="text-[10px] text-gray-500 uppercase tracking-widest mt-1">Trust
-                                    Score</span>
+                
+                <div class="flex flex-col md:flex-row items-center gap-8 z-10 relative">
+                    <!-- Score Circle -->
+                    <div class="flex flex-col items-center">
+                        <div class="score-circle" id="scoreCircle" style="--score-deg: 0deg; --score-color: #555;">
+                            <div class="score-content">
+                                <div id="trustScoreLabel" class="text-sm text-gray-400 font-medium mb-1 tracking-widest uppercase">Trust Score</div>
+                                <div class="text-6xl font-black tracking-tighter" id="scoreValue">--</div>
+                                <div class="text-xs font-mono mt-1 text-gray-500">/ 100</div>
                             </div>
+                        </div>
+                        <div id="riskBadge" class="mt-4 px-4 py-1.5 rounded-full text-sm font-bold tracking-wider uppercase bg-gray-800 text-gray-400 border border-gray-700">
+                            Analyzing
                         </div>
                     </div>
 
-                    <!-- Verdict Info -->
-                    <div class="flex-1 text-center md:text-left space-y-4 relative z-10">
-                        <div class="space-y-1">
-                            <h2 id="coinTicker" class="text-4xl font-bold text-white tracking-tight">$TOKEN</h2>
-                            <div class="flex items-center justify-center md:justify-start gap-2">
-                                <span id="riskBadge"
-                                    class="px-3 py-1 rounded text-xs font-bold bg-gray-800 text-gray-300 border border-gray-700 uppercase tracking-wider">ANALYZING</span>
-                                <a id="dexLink" href="#" target="_blank"
-                                    class="text-xs text-gray-500 hover:text-white flex items-center gap-1 transition">
-                                    DexScreener <i data-lucide="external-link" class="w-3 h-3"></i>
-                                </a>
+                    <!-- Summary Info -->
+                    <div class="flex-1 text-center md:text-left">
+                        <div class="flex items-center justify-center md:justify-start gap-3 mb-2">
+                            <h2 class="text-4xl md:text-5xl font-black tracking-tight" id="tickerDisplay">--</h2>
+                            <span class="text-xs bg-white/10 px-2 py-1 rounded font-mono text-gray-300 border border-white/10" id="cacheBadge" style="display:none;">Cached</span>
+                        </div>
+                        <p id="verdictDisplay" class="text-xl text-gray-300 font-medium mb-6 leading-relaxed">
+                            Analysis pending...
+                        </p>
+                        
+                        <!-- OpenGradient Verification Badge -->
+                        <a id="ogVerifyBtn" href="#" target="_blank" class="inline-flex items-center gap-2 bg-gradient-to-r from-gray-900 to-black border border-white/10 hover:border-secondary/50 px-4 py-2 rounded-lg transition-all group shadow-lg">
+                            <i data-lucide="cpu" class="w-5 h-5 text-secondary group-hover:text-white transition-colors"></i>
+                            <div class="text-left flex flex-col">
+                                <span id="aiBadgeTitle" class="text-[10px] text-gray-500 uppercase tracking-wider font-bold">Verifiable AI Audit</span>
+                                <span class="text-sm font-semibold text-gray-200 group-hover:text-white flex items-center gap-1">
+                                    <span id="aiBadgeLinkText">View on OpenGradient</span> <i data-lucide="external-link" class="w-3 h-3 opacity-50"></i>
+                                </span>
                             </div>
-                        </div>
-
-                        <div class="bg-white/5 border-l-2 border-primary p-4 rounded-r-lg">
-                            <p id="verdictText" class="text-gray-200 text-lg font-medium leading-relaxed">"..."</p>
-                        </div>
+                        </a>
                     </div>
                 </div>
             </div>
 
-            <!-- 2. SCORE DETAILS (Grid 2x2) -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <!-- Social -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
-                    <div
-                        class="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400 mb-1">
-                        <i data-lucide="twitter" class="w-5 h-5"></i>
+            <!-- Detailed Breakdown Grid (3 columns for v3.1 weights) -->
+            <h3 id="scoreBreakdownTitle" class="text-xl font-bold mb-4 flex items-center gap-2 text-gray-200">
+                <i data-lucide="bar-chart" class="text-primary w-5 h-5"></i>
+                Score Breakdown
+            </h3>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                
+                <!-- Technical (65%) -->
+                <div class="glass-panel p-5 rounded-xl flex flex-col hover:bg-white/5 transition border-t-2 border-blue-500/50">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-2">
+                            <div class="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400">
+                                <i data-lucide="trending-up" class="w-4 h-4"></i>
+                            </div>
+                            <span id="techTitleText" class="text-sm text-gray-400 font-bold uppercase tracking-wider">Technical</span>
+                        </div>
+                        <span class="text-xs font-mono text-blue-400 bg-blue-500/10 px-2 py-1 rounded">65%</span>
                     </div>
-                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Social</div>
-                    <div class="text-2xl font-bold text-white" id="socialScore">--</div>
-                </div>
-                <!-- Bot -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
-                    <div
-                        class="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-400 mb-1">
-                        <i data-lucide="bot" class="w-5 h-5"></i>
+                    
+                    <div class="flex items-end gap-2 mb-4">
+                        <span class="text-3xl font-bold text-white" id="techScoreTotal">--</span>
+                        <span class="text-sm text-gray-500 mb-1">/100</span>
                     </div>
-                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Bot Health</div>
-                    <div class="text-2xl font-bold text-white" id="botScore">--</div>
-                </div>
-                <!-- Holder -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
-                    <div
-                        class="w-10 h-10 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-400 mb-1">
-                        <i data-lucide="wallet" class="w-5 h-5"></i>
+                    
+                    <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm">
+                        <div class="flex justify-between items-center">
+                            <span id="momentumLabel" class="text-gray-400">Momentum</span>
+                            <span class="font-mono text-white" id="score_momentum">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span id="volumeLabel" class="text-gray-400">Volume (24h)</span>
+                            <span class="font-mono text-white" id="score_volume">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span id="tradePressureLabel" class="text-gray-400">Trade Pressure</span>
+                            <span class="font-mono text-white" id="score_trade">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span id="liquidityDepthLabel" class="text-gray-400">Liquidity Depth</span>
+                            <span class="font-mono text-white" id="score_liquidity">--</span>
+                        </div>
                     </div>
-                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Holder</div>
-                    <div class="text-2xl font-bold text-white" id="holderScore">--</div>
                 </div>
-                <!-- Sentiment -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col items-center text-center gap-2 hover:bg-white/5 transition">
-                    <div
-                        class="w-10 h-10 rounded-full bg-pink-500/10 flex items-center justify-center text-pink-400 mb-1">
-                        <i data-lucide="heart-pulse" class="w-5 h-5"></i>
+
+                <!-- On-Chain (35%) -->
+                <div class="glass-panel p-5 rounded-xl flex flex-col hover:bg-white/5 transition border-t-2 border-emerald-500/50">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-2">
+                            <div class="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+                                <i data-lucide="link" class="w-4 h-4"></i>
+                            </div>
+                            <span id="onchainTitleText" class="text-sm text-gray-400 font-bold uppercase tracking-wider">On-Chain</span>
+                        </div>
+                        <span class="text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">35%</span>
                     </div>
-                    <div class="text-xs text-gray-500 uppercase font-bold tracking-wider">Sentiment</div>
-                    <div class="text-2xl font-bold text-white" id="sentimentScore">--</div>
+
+                    <div class="flex items-end gap-2 mb-4">
+                        <span class="text-3xl font-bold text-white" id="onchainScoreTotal">--</span>
+                        <span class="text-sm text-gray-500 mb-1">/100</span>
+                    </div>
+
+                    <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm">
+                        <div class="flex justify-between items-center">
+                            <span id="holdersBaseLabel" class="text-gray-400">Holders Base</span>
+                            <span class="font-mono text-white" id="score_holder">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span id="contractSecurityLabel" class="text-gray-400">Contract Security</span>
+                            <span class="font-mono text-white" id="score_security">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span id="whaleRiskLabel" class="text-gray-400">Whale Risk</span>
+                            <span class="font-mono text-white" id="score_whale">--</span>
+                        </div>
+                    </div>
                 </div>
+
+                <!-- OpenGradient AI Verified (0%) -->
+                <div class="glass-panel p-5 rounded-xl flex flex-col hover:bg-white/5 transition border-t-2 border-secondary/50 opacity-80">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-2">
+                            <div class="w-8 h-8 rounded-full bg-secondary/10 flex items-center justify-center text-secondary">
+                                <i data-lucide="cpu" class="w-4 h-4"></i>
+                            </div>
+                            <span id="aiVerifiedTitleText" class="text-sm text-gray-400 font-bold uppercase tracking-wider">AI Verified</span>
+                        </div>
+                        <span class="text-xs font-mono text-secondary bg-secondary/10 px-2 py-1 rounded">ON-CHAIN</span>
+                    </div>
+
+                    <div class="flex flex-col items-start gap-1 mb-4 h-[44px] justify-end">
+                        <span class="text-sm font-bold text-white">Trust Framework v3.1</span>
+                    </div>
+
+                    <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm text-gray-400">
+                        <p id="aiVerifiedDescText" class="text-xs leading-relaxed">
+                            Scores are processed securely on-chain using OpenGradient's verifiable compute network.
+                        </p>
+                        <div class="flex items-center gap-2 mt-2 text-secondary text-xs font-mono">
+                            <i data-lucide="check-circle" class="w-3 h-3"></i> <span id="computationVerifiedText">Computation Verified</span>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
-            <!-- 3. FLAGS (Columns) -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Flags Section -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <!-- Red Flags -->
-                <div class="glass-panel rounded-xl p-6 border-l-2 border-danger/50">
-                    <h3 class="text-danger font-bold mb-4 flex items-center gap-2 uppercase text-sm tracking-wider">
-                        <i data-lucide="x-circle" class="w-4 h-4"></i> Red Flags
+                <div class="glass-panel p-6 rounded-xl border border-red-500/20 bg-red-500/5 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-24 h-24 bg-red-500/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
+                    <h3 id="redFlagsTitleText" class="text-red-400 font-bold mb-4 flex items-center gap-2 text-lg relative z-10">
+                        <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+                        Risk Factors (Red Flags)
                     </h3>
-                    <ul id="redFlagsList" class="space-y-3 text-sm text-gray-400">
+                    <ul id="redFlagsList" class="space-y-3 relative z-10">
+                        <!-- Dynamic content -->
                     </ul>
                 </div>
 
                 <!-- Green Flags -->
-                <div class="glass-panel rounded-xl p-6 border-l-2 border-primary/50">
-                    <h3 class="text-primary font-bold mb-4 flex items-center gap-2 uppercase text-sm tracking-wider">
-                        <i data-lucide="check-circle-2" class="w-4 h-4"></i> Green Flags
+                <div class="glass-panel p-6 rounded-xl border border-primary/20 bg-primary/5 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-24 h-24 bg-primary/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
+                    <h3 id="greenFlagsTitleText" class="text-primary font-bold mb-4 flex items-center gap-2 text-lg relative z-10">
+                        <i data-lucide="check-circle-2" class="w-5 h-5"></i>
+                        Positive Signals (Green Flags)
                     </h3>
-                    <ul id="greenFlagsList" class="space-y-3 text-sm text-gray-400">
+                    <ul id="greenFlagsList" class="space-y-3 relative z-10">
+                        <!-- Dynamic content -->
                     </ul>
                 </div>
             </div>
 
-            <!-- 4. MARKET & ACTIONS -->
-            <div id="marketDataSection" class="hidden glass-panel p-6 rounded-2xl">
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                    <div>
-                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">Price</div>
-                        <div id="dexPrice" class="text-xl font-mono text-white">$0.00</div>
-                    </div>
-                    <div>
-                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">Liquidity</div>
-                        <div id="dexLiquidity" class="text-xl font-mono text-gray-300">$0</div>
-                    </div>
-                    <div>
-                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">24h Change</div>
-                        <div id="dex24h" class="text-xl font-mono font-bold">--%</div>
-                    </div>
-                    <div>
-                        <div class="text-gray-500 text-[10px] uppercase font-bold mb-1">Pair Age</div>
-                        <div id="dexAge" class="text-xl font-mono text-gray-300">--</div>
-                    </div>
-                </div>
-
-                <!-- Chart -->
-                <div id="dexChart"
-                    class="w-full h-[400px] rounded-lg overflow-hidden border border-white/10 bg-black/40 mb-6"></div>
-
-                <!-- Action Buttons -->
-                <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    <a id="btnBuy" href="#" target="_blank"
-                        class="bg-green-500/20 text-green-400 border border-green-500/50 hover:bg-green-500 hover:text-black font-bold py-3 rounded-lg text-center transition flex items-center justify-center gap-2">
-                        BUY
-                    </a>
-                    <a id="btnSell" href="#" target="_blank"
-                        class="bg-red-500/20 text-red-400 border border-red-500/50 hover:bg-red-500 hover:text-white font-bold py-3 rounded-lg text-center transition flex items-center justify-center gap-2">
-                        SELL
-                    </a>
-                    <a id="btnSwap" href="#" target="_blank"
-                        class="col-span-2 md:col-span-1 bg-white/10 text-white border border-white/20 hover:bg-white/20 font-bold py-3 rounded-lg text-center transition flex items-center justify-center gap-2">
-                        <i data-lucide="arrow-right-left" class="w-4 h-4"></i> SWAP (JUP)
-                    </a>
-                </div>
-            </div>
-
-            <!-- 5. AI VERIFICATION FOOTER -->
-            <div class="flex flex-col items-center justify-center py-6 gap-2 border-t border-white/5">
+            <!-- Footer Meta -->
+            <div class="flex flex-col items-center justify-center py-6 gap-2 border-t border-white/5 mt-8">
                 <div class="flex items-center gap-2 text-sm text-gray-500">
                     <i data-lucide="shield-check" class="w-4 h-4 text-primary"></i>
-                    <span>Verified by OpenGradient</span>
+                    <span id="verifiableInferenceText">Verifiable inference by OpenGradient</span>
                 </div>
-                <a id="verifyLink" href="#" target="_blank"
-                    class="hidden text-xs font-mono text-gray-600 hover:text-primary transition flex items-center gap-1 bg-black/30 px-3 py-1 rounded-full border border-white/5">
-                    TX: <span id="txHash">...</span> <i data-lucide="external-link" class="w-3 h-3"></i>
-                </a>
+                <div id="scoringAlgoText" class="text-xs text-gray-600 font-mono mt-2" id="metaInfo">
+                    Scoring Algorithm v3.1 (Technical 65% / On-Chain 35%)
+                </div>
             </div>
-
-            <!-- Demo Notice -->
-            <p id="demoNotice" class="hidden text-center text-xs text-warning/80 font-mono mt-2">
-                ⚠️ Backend unreachable. Showing DEMO data.
-            </p>
 
         </div>
     </main>
 
-    <!-- Footer -->
-    <footer class="w-full text-center py-8 text-gray-600 text-xs border-t border-white/5">
-        <p>&copy; 2024 CoinCheckGo. Built for the OpenGradient Hackathon.</p>
-    </footer>
-
-    <!-- Scrip for Autosuggest -->
     <script>
-        lucide.createIcons();
-        window.addEventListener('DOMContentLoaded', loadTrendingCoins);
-
-        // --- API BASE URL (auto-detect) ---
-        const API_BASE = window.location.origin;
-
-        // --- DEBOUNCE UTILITY ---
-        function debounce(func, wait) {
-            let timeout;
-            return function executedFunction(...args) {
-                const later = () => {
-                    clearTimeout(timeout);
-                    func(...args);
-                };
-                clearTimeout(timeout);
-                timeout = setTimeout(later, wait);
-            };
+    const translations = {
+        en: {
+            title: 'CoinCheckGo - Meme Coin Auditor',
+            features: 'Features',
+            trending: 'Trending',
+            heroTitle1: "Don't Buy ",
+            heroTitleTrash: 'Trash',
+            heroTitle2: 'Buy ',
+            heroTitleAlpha: 'Alpha',
+            heroTitleAvoid: '. Avoid ',
+            heroTitleRugs: 'Rugs',
+            heroTitleScams: ' & Scams.',
+            heroDesc: 'Technical & On-Chain Analysis powered by OpenGradient AI. Real-time auditing for Solana tokens.',
+            searchPlaceholder: 'Enter token symbol or contract address...',
+            btnAudit: 'Audit Token',
+            trendingLabel: 'Trending:',
+            loadingTitle: 'Analyzing Token...',
+            step1: 'Gathering Technical & On-chain data',
+            step2: 'Calculating Momentum & Volume metrics',
+            step3: 'Analyzing Security & Whale risk',
+            step4: 'OpenGradient AI verifying models on-chain',
+            step5: 'Finalizing AI Audit Report',
+            analyzing: 'Analyzing',
+            trustScore: 'Trust Score',
+            cached: 'Cached',
+            aiBadgeTitle: 'Verifiable AI Audit',
+            aiBadgeLink: 'View on OpenGradient',
+            aiBadgePending: 'AI Verification Pending',
+            scoreBreakdown: 'Score Breakdown',
+            techTitle: 'Technical',
+            momentum: 'Momentum',
+            volume: 'Volume (24h)',
+            tradePressure: 'Trade Pressure',
+            liquidityDepth: 'Liquidity Depth',
+            onchainTitle: 'On-Chain',
+            holdersBase: 'Holders Base',
+            contractSecurity: 'Contract Security',
+            whaleRisk: 'Whale Risk',
+            aiVerifiedTitle: 'AI Verified',
+            aiVerifiedDesc: 'Scores are processed securely on-chain using OpenGradient\'s verifiable compute network.',
+            computationVerified: 'Computation Verified',
+            redFlagsTitle: 'Risk Factors (Red Flags)',
+            greenFlagsTitle: 'Positive Signals (Green Flags)',
+            noRedFlags: 'No major risk factors detected',
+            noGreenFlags: 'No significant positive signals',
+            verifiableInference: 'Verifiable inference by OpenGradient',
+            scoringAlgo: 'Scoring Algorithm v3.1 (Technical 65% / On-Chain 35%)',
+            contract: 'Contract: ',
+            unknown: 'Unknown',
+            moon: 'Moon',
+            lowRisk: 'Low Risk',
+            mediumRisk: 'Medium Risk',
+            highRisk: 'High Risk',
+            extremeRug: 'Extreme Rug Risk',
+            analysisFailed: 'Analysis failed',
+            errorPrefix: 'Error: '
+        },
+        vi: {
+            title: 'CoinCheckGo - Kiểm định Meme Coin',
+            features: 'Tính năng',
+            trending: 'Xu hướng',
+            heroTitle1: 'Đừng Mua ',
+            heroTitleTrash: 'Rác',
+            heroTitle2: 'Mua ',
+            heroTitleAlpha: 'Alpha',
+            heroTitleAvoid: '. Tránh ',
+            heroTitleRugs: 'Rug Pull',
+            heroTitleScams: ' & Scam.',
+            heroDesc: 'Phân tích Kỹ thuật & On-Chain với OpenGradient AI. Kiểm định thời gian thực cho token Solana.',
+            searchPlaceholder: 'Nhập mã token hoặc địa chỉ contract...',
+            btnAudit: 'Kiểm định Token',
+            trendingLabel: 'Xu hướng:',
+            loadingTitle: 'Đang Phân tích Token...',
+            step1: 'Thu thập dữ liệu Kỹ thuật & On-chain',
+            step2: 'Tính toán chỉ số Đà tăng & Khối lượng',
+            step3: 'Phân tích Bảo mật & Rủi ro cá voi',
+            step4: 'OpenGradient AI xác minh on-chain',
+            step5: 'Hoàn thiện Báo cáo Kiểm định AI',
+            analyzing: 'Đang phân tích',
+            trustScore: 'Điểm Tin cậy',
+            cached: 'Đã cache',
+            aiBadgeTitle: 'Kiểm định AI có thể xác minh',
+            aiBadgeLink: 'Xem trên OpenGradient',
+            aiBadgePending: 'Chờ xác minh AI',
+            scoreBreakdown: 'Chi tiết Điểm số',
+            techTitle: 'Kỹ thuật',
+            momentum: 'Đà tăng',
+            volume: 'Khối lượng (24h)',
+            tradePressure: 'Áp lực Giao dịch',
+            liquidityDepth: 'Độ sâu Thanh khoản',
+            onchainTitle: 'On-Chain',
+            holdersBase: 'Cơ sở Holder',
+            contractSecurity: 'Bảo mật Contract',
+            whaleRisk: 'Rủi ro Cá voi',
+            aiVerifiedTitle: 'Đã xác minh AI',
+            aiVerifiedDesc: 'Điểm số được xử lý an toàn on-chain qua mạng tính toán có thể xác minh của OpenGradient.',
+            computationVerified: 'Tính toán đã xác minh',
+            redFlagsTitle: 'Yếu tố Rủi ro (Cờ Đỏ)',
+            greenFlagsTitle: 'Tín hiệu Tích cực (Cờ Xanh)',
+            noRedFlags: 'Không phát hiện yếu tố rủi ro lớn',
+            noGreenFlags: 'Không có tín hiệu tích cực đáng kể',
+            verifiableInference: 'Suy luận có thể xác minh bởi OpenGradient',
+            scoringAlgo: 'Thuật toán Chấm điểm v3.1 (Kỹ thuật 65% / On-Chain 35%)',
+            contract: 'Contract: ',
+            unknown: 'Không rõ',
+            moon: 'Moon',
+            lowRisk: 'Rủi ro Thấp',
+            mediumRisk: 'Rủi ro Trung bình',
+            highRisk: 'Rủi ro Cao',
+            extremeRug: 'Rủi ro Rug Cực cao',
+            analysisFailed: 'Phân tích thất bại',
+            errorPrefix: 'Lỗi: '
         }
+    };
 
-        // --- AUTOCOMPLETE LOGIC ---
-        const input = document.getElementById('tickerInput');
+    let currentLang = 'vi';
 
-        // Create dropdown element dynamically
-        const dropdown = document.createElement('div');
-        dropdown.id = 'searchDropdown';
-        dropdown.className = 'hidden absolute top-full left-0 w-full bg-[#0F0F12] border border-white/10 rounded-lg mt-2 max-h-60 overflow-y-auto z-50 shadow-2xl';
-        input.parentElement.appendChild(dropdown);
+    function applyLanguage() {
+        const t = translations[currentLang];
+        
+        document.title = t.title;
+        
+        document.getElementById('navFeatures').innerText = t.features;
+        document.getElementById('navTrending').innerText = t.trending;
+        
+        document.getElementById('heroTitle1').innerText = t.heroTitle1;
+        document.getElementById('heroTitleTrash').innerText = t.heroTitleTrash;
+        document.getElementById('heroTitle2').innerText = t.heroTitle2;
+        document.getElementById('heroTitleAlpha').innerText = t.heroTitleAlpha;
+        document.getElementById('heroTitleAvoid').innerText = t.heroTitleAvoid;
+        document.getElementById('heroTitleRugs').innerText = t.heroTitleRugs;
+        document.getElementById('heroTitleScams').innerText = t.heroTitleScams;
+        document.getElementById('heroDesc').innerText = t.heroDesc;
+        
+        document.getElementById('tickerInput').placeholder = t.searchPlaceholder;
+        document.getElementById('btnAuditText').innerText = t.btnAudit;
+        document.getElementById('trendingLabelText').innerText = t.trendingLabel;
+        
+        document.getElementById('loadingTitleText').innerText = t.loadingTitle;
+        document.getElementById('step1Text').innerText = t.step1;
+        document.getElementById('step2Text').innerText = t.step2;
+        document.getElementById('step3Text').innerText = t.step3;
+        document.getElementById('step4Text').innerText = t.step4;
+        document.getElementById('step5Text').innerText = t.step5;
+        
+        document.getElementById('trustScoreLabel').innerText = t.trustScore;
+        
+        document.getElementById('cacheBadge').innerText = t.cached;
+        
+        document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
+        document.getElementById('aiBadgeLinkText').innerText = t.aiBadgeLink;
+        
+        document.getElementById('scoreBreakdownTitle').innerText = t.scoreBreakdown;
+        document.getElementById('techTitleText').innerText = t.techTitle;
+        document.getElementById('momentumLabel').innerText = t.momentum;
+        document.getElementById('volumeLabel').innerText = t.volume;
+        document.getElementById('tradePressureLabel').innerText = t.tradePressure;
+        document.getElementById('liquidityDepthLabel').innerText = t.liquidityDepth;
+        
+        document.getElementById('onchainTitleText').innerText = t.onchainTitle;
+        document.getElementById('holdersBaseLabel').innerText = t.holdersBase;
+        document.getElementById('contractSecurityLabel').innerText = t.contractSecurity;
+        document.getElementById('whaleRiskLabel').innerText = t.whaleRisk;
+        
+        document.getElementById('aiVerifiedTitleText').innerText = t.aiVerifiedTitle;
+        document.getElementById('aiVerifiedDescText').innerText = t.aiVerifiedDesc;
+        document.getElementById('computationVerifiedText').innerText = t.computationVerified;
+        
+        document.getElementById('redFlagsTitleText').innerText = t.redFlagsTitle;
+        document.getElementById('greenFlagsTitleText').innerText = t.greenFlagsTitle;
+        
+        document.getElementById('verifiableInferenceText').innerText = t.verifiableInference;
+        document.getElementById('scoringAlgoText').innerText = t.scoringAlgo;
+        document.getElementById('footerText').innerText = t.footer;
+    }
 
-        // Close dropdown when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!input.contains(e.target) && !dropdown.contains(e.target)) {
-                dropdown.classList.add('hidden');
-            }
-        });
+    function toggleLanguage() {
+        currentLang = currentLang === 'en' ? 'vi' : 'en';
+        applyLanguage();
+        document.getElementById('langToggleBtn').innerText = currentLang === 'en' ? ' VN' : ' EN';
+    }
 
-        // Search handler
-        const handleSearch = async (e) => {
-            const query = e.target.value.trim();
-            if (query.length < 2) {
-                dropdown.classList.add('hidden');
-                return;
-            }
+    document.addEventListener('DOMContentLoaded', () => {
+        applyLanguage();
+    });
 
-            try {
-                // Determine if query is address or name
-                const isAddress = query.length > 30 && !query.includes(' ');
-                // Use local backend proxy to avoid client-side blocks/CORS
-                const searchUrl = `${API_BASE}/api/dex/search?q=${query}`;
+    function resetUI() {
+        document.getElementById('hero').classList.remove('hidden');
+        document.getElementById('result').classList.add('hidden');
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('tickerInput').value = '';
+        document.getElementById('suggestionsBox').classList.remove('show');
+        document.getElementById('searchContainer').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
 
-                const res = await fetch(searchUrl);
-                const data = await res.json();
+    function setTicker(symbol) {
+        document.getElementById('tickerInput').value = symbol;
+        document.getElementById('suggestionsBox').classList.remove('show');
+        analyzeToken();
+    }
 
-                if (!data.pairs || data.pairs.length === 0) {
-                    dropdown.classList.add('hidden');
-                    return;
-                }
-
-                // Filter for Solana pairs only and Deduplicate by base token
-                const uniqueTokens = new Map();
-                data.pairs.forEach(pair => {
-                    if (pair.chainId === 'solana') {
-                        const tokenAddress = pair.baseToken.address;
-                        if (!uniqueTokens.has(tokenAddress)) {
-                            uniqueTokens.set(tokenAddress, pair);
-                        }
-                    }
-                });
-
-                const results = Array.from(uniqueTokens.values()).slice(0, 8); // Show max 8
-
-                if (results.length === 0) {
-                    dropdown.classList.add('hidden');
-                    return;
-                }
-
-                // Render — show token name + full contract + price info
-                dropdown.innerHTML = results.map(pair => {
-                    const addr = pair.baseToken.address;
-                    const shortAddr = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-                    const price = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(6)}` : '';
-                    const change = pair.priceChange?.h24 ?? 0;
-                    const changeColor = change >= 0 ? 'text-green-400' : 'text-red-400';
-                    const changeText = `${change >= 0 ? '+' : ''}${change}%`;
-
-                    return `
-                    <div onclick="selectToken('${addr}', '${pair.baseToken.symbol}')" 
-                        class="p-3 hover:bg-white/5 cursor-pointer border-b border-white/5 last:border-0 transition-colors">
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-2">
-                                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-blue-500/30 flex items-center justify-center text-xs font-bold text-white">
-                                    ${pair.baseToken.symbol.slice(0, 2)}
-                                </div>
-                                <div class="flex flex-col">
-                                    <span class="font-bold text-white text-sm">$${pair.baseToken.symbol}</span>
-                                    <span class="text-[10px] text-gray-400">${pair.baseToken.name}</span>
-                                </div>
-                            </div>
-                            <div class="text-right flex flex-col items-end">
-                                <span class="text-xs text-gray-300 font-mono">${price}</span>
-                                <span class="text-[10px] font-bold ${changeColor}">${changeText}</span>
-                            </div>
-                        </div>
-                        <div class="mt-1.5 flex items-center gap-1.5">
-                            <span class="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 font-bold">SOL</span>
-                            <span class="text-[10px] text-gray-500 font-mono select-all" title="${addr}">${shortAddr}</span>
-                            <button onclick="event.stopPropagation(); navigator.clipboard.writeText('${addr}')" 
-                                class="text-gray-600 hover:text-primary transition ml-auto" title="Copy contract">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                            </button>
-                        </div>
-                    </div>`;
-                }).join('');
-
-                dropdown.classList.remove('hidden');
-
-            } catch (err) {
-                console.error("Search failed:", err);
-            }
+    function updateLoadingStep(stepIndex) {
+        const steps = document.getElementById('loadingSteps').children;
+        const loadingTitle = document.getElementById('loadingTitleText');
+        const statusLog = document.getElementById('statusLogText');
+        const t = translations[currentLang];
+        const stepTitles = [
+            t.step1,
+            t.step2,
+            t.step3,
+            t.step4,
+            t.step5
+        ];
+        
+        const statusMessages = {
+            0: [
+                '> Connecting to DexScreener API...',
+                '> Fetching token metadata...',
+                '> Checking chain type (Solana/EVM)...'
+            ],
+            1: [
+                '> Calculating momentum from price changes...',
+                '> Analyzing volume patterns...',
+                '> Computing trade pressure metrics...'
+            ],
+            2: [
+                '> Checking contract security (mint/freeze authority)...',
+                '> Analyzing holder distribution...',
+                '> Calculating whale risk concentration...'
+            ],
+            3: [
+                '> Initializing OpenGradient AI...',
+                '> Method A: Direct LLM.chat()...',
+                '> Sending inference to TEE...',
+                '> Waiting for on-chain verification...'
+            ],
+            4: [
+                '> Parsing AI verdict...',
+                '> Merging algorithmic + AI scores...',
+                '> Finalizing audit report...'
+            ]
         };
-
-        input.addEventListener('input', debounce(handleSearch, 300));
-
-        function selectToken(address, symbol) {
-            // When user selects, we fill the input with the ADDRESS (for precision)
-            // But the UI search will resolve it to the Symbol in the report
-            input.value = address;
-            dropdown.classList.add('hidden');
-            analyzeCoin(); // Auto-trigger analysis
-        }
-
-
-        // --- TRENDING LOGIC ---
-        async function loadTrendingCoins() {
-
-            const TOKENS = [
-                'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', // BONK
-                'EKpQGSJtjMFqKZ9KQanSqErQVvvHFknBh12Qy7xcPump', // WIF
-                '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr', // POPCAT
-                '2qEHjDLDLbuBgRYvsxhc5D6uDWAivNFZGan56P1tpump' // PNUT
-            ];
-
-            try {
-                // Use local backend proxy for tokens
-                const res = await fetch(`${API_BASE}/api/dex/tokens/${TOKENS.join(',')}`);
-                const json = await res.json();
-
-                if (!json.pairs) return;
-
-                const uniquePairs = [];
-                const seen = new Set();
-
-                for (const pair of json.pairs) {
-                    // Filter: Must be Solana chain. Relax quote token check to include USDC/USDT if SOL not found.
-                    if (pair.chainId === 'solana' && !seen.has(pair.baseToken.symbol)) {
-                        // Prefer SOL pairs, but accept others if it's the first time we see this token
-                        if (pair.quoteToken.symbol === 'SOL' || !uniquePairs.find(p => p.baseToken.symbol === pair.baseToken.symbol)) {
-                            seen.add(pair.baseToken.symbol);
-                            uniquePairs.push(pair);
-                        }
-                    }
+        
+        for (let i = 0; i < steps.length; i++) {
+            if (i < stepIndex) {
+                steps[i].className = 'flex items-center gap-2 text-primary opacity-100 transition-all duration-300 transform scale-100';
+                const icon = steps[i].querySelector('i');
+                if (icon) icon.setAttribute('data-lucide', 'check');
+            } else if (i === stepIndex) {
+                steps[i].className = 'flex items-center gap-2 text-white opacity-100 transition-all duration-300 transform scale-105 font-bold';
+                loadingTitle.innerText = stepTitles[i] || t.analyzing + '...';
+                
+                // Update status log
+                if (statusLog && statusMessages[i]) {
+                    const msgs = statusMessages[i];
+                    statusLog.innerHTML = msgs.map(m => `<div class="mb-1">${m}</div>`).join('');
+                    statusLog.scrollTop = statusLog.scrollHeight;
                 }
-
-
-                const grid = document.getElementById('trendingGrid');
-                grid.innerHTML = uniquePairs.map(pair => `
-<div onclick="selectTrend('${pair.baseToken.symbol}')"
-    class="glass-panel p-3 rounded-lg cursor-pointer hover:bg-white/5 transition flex items-center justify-between group">
-    <div class="flex flex-col">
-        <span class="font-bold text-sm text-white group-hover:text-primary transition">$${pair.baseToken.symbol}</span>
-        <span class="text-[10px] text-gray-400">$${parseFloat(pair.priceUsd).toFixed(6)}</span>
-    </div>
-    <div
-        class="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-black/40 ${pair.priceChange.h24 >= 0 ? 'text-primary' : 'text-danger'}">
-        ${pair.priceChange.h24 >= 0 ? '+' : ''}${pair.priceChange.h24}%
-    </div>
-</div>
-`).join('');
-
-            } catch (e) {
-                console.error("Failed to load trending", e);
+            } else {
+                steps[i].className = 'flex items-center gap-2 text-gray-500 opacity-40 transition-all duration-300 transform scale-95';
             }
         }
+        lucide.createIcons();
+    }
 
-        function selectTrend(ticker) {
-            document.getElementById('tickerInput').value = ticker;
-            analyzeCoin();
+    async function analyzeToken() {
+        let input = document.getElementById('tickerInput').value.trim();
+        if (!input) return;
+
+        const t = translations[currentLang];
+
+        let requestBody = {};
+        if (input.length > 30 && !input.includes(' ')) {
+            // Contract address detected - let backend determine chain
+            requestBody = { ticker: "ANALYZE", contract_address: input, force_refresh: true };
+        } else {
+            requestBody = { ticker: input, force_refresh: true };
         }
 
-        // --- CORE ANALYSIS LOGIC ---
-        async function analyzeCoin() {
-            const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
-            if (!ticker) return;
+        const btn = document.getElementById('analyzeBtn');
+        const loading = document.getElementById('loading');
+        const result = document.getElementById('result');
+        const hero = document.getElementById('hero');
 
-            // UI State: Loading
-            const loading = document.getElementById('loading');
-            const result = document.getElementById('result');
-            const market = document.getElementById('marketDataSection');
-            const btn = document.getElementById('analyzeBtn');
+        btn.disabled = true;
+        hero.classList.add('hidden');
+        result.classList.add('hidden');
+        loading.classList.remove('hidden');
+        loading.classList.add('flex');
+        
+        let currentStep = 0;
+        updateLoadingStep(currentStep);
+        
+        const progressInterval = setInterval(() => {
+            if (currentStep < 4) {
+                currentStep++;
+                updateLoadingStep(currentStep);
+            }
+        }, 2000); 
 
-            loading.classList.remove('hidden');
-            loading.classList.add('flex');
-            result.classList.add('hidden');
-            market.classList.add('hidden');
-            btn.disabled = true;
-            btn.innerHTML = `<i data-lucide="loader" class="w-5 h-5 animate-spin"></i>`;
-            lucide.createIcons();
+        try {
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
 
-            // Animate loading steps sequentially with descriptive titles
-            const steps = document.getElementById('loadingSteps').children;
-            const loadingTitle = document.getElementById('loadingTitle');
-            const stepTitles = [
-                'Checking Twitter...',
-                'Fetching On-chain Data...',
-                'Detecting Bot Patterns...',
-                'OpenGradient AI Analyzing...',
-                'Generating Audit Report...'
-            ];
-            for (let i = 0; i < steps.length; i++) {
-                setTimeout(() => {
-                    steps[i].style.opacity = '1';
-                    steps[i].classList.add('text-white');
-                    if (stepTitles[i]) loadingTitle.textContent = stepTitles[i];
-                }, 800 + i * 1500);
+            clearInterval(progressInterval);
+            updateLoadingStep(4); 
+
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.detail || t.analysisFailed);
             }
 
-            // Fetch DexScreener data in parallel
-            const dexPromise = fetchDexData(ticker);
-
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 180000); // 3min — Apify scraper is slow
-
-                const response = await fetch(`${API_BASE}/api/analyze`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ticker: ticker }),
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) throw new Error("API Error");
-                const data = await response.json();
-
-                // Normalize backend response to frontend format
-                const normalized = {
-                    ticker: data.ticker,
-                    overall_score: data.overall_score,
-                    risk_level: data.risk_level,
-                    verdict: data.verdict,
-                    tx_hash: data.tx_hash,
-                    verify_url: data.verify_url,
-                    details: {
-                        social_score: data.scores?.social_score ?? 0,
-                        bot_score: data.scores?.bot_score ?? 0,
-                        holder_score: data.scores?.holder_score ?? 0,
-                        sentiment_score: data.scores?.sentiment_score ?? 0,
-                    },
-                    red_flags: data.red_flags || [],
-                    green_flags: data.green_flags || [],
-                };
-                renderResult(normalized, false);
-
-            } catch (error) {
-                console.warn("Using mock data due to:", error);
-                await new Promise(r => setTimeout(r, 2000)); // Fake delay
-                const mockData = generateMockData(ticker);
-                renderResult(mockData, true);
-            } finally {
-                // dexPromise runs in background (non-blocking)
-                loading.classList.add('hidden');
+            setTimeout(() => {
+                displayResult(data);
                 loading.classList.remove('flex');
+                loading.classList.add('hidden');
                 btn.disabled = false;
-                btn.innerHTML = `<span>CHECK</span><i data-lucide="arrow-right" class="w-5 h-5"></i>`;
-                lucide.createIcons();
+            }, 500);
 
-                // Reset steps opacity and title
-                Array.from(steps).forEach(s => {
-                    s.style.opacity = '0.3';
-                    s.classList.remove('text-white');
-                });
-                loadingTitle.textContent = 'Scanning Network...';
+        } catch (error) {
+            clearInterval(progressInterval);
+            alert(t.errorPrefix + error.message);
+            btn.disabled = false;
+            loading.classList.remove('flex');
+            loading.classList.add('hidden');
+            hero.classList.remove('hidden');
+        }
+    }
+
+    function getRiskConfig(score) {
+        const t = translations[currentLang];
+        if (score >= 80) return { color: '#00ff9d', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400', label: t.moon };
+        if (score >= 65) return { color: '#3b82f6', bg: 'bg-blue-500/10', border: 'border-blue-500/30', text: 'text-blue-400', label: t.lowRisk };
+        if (score >= 50) return { color: '#eab308', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-400', label: t.mediumRisk };
+        if (score >= 35) return { color: '#f97316', bg: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-400', label: t.highRisk };
+        return { color: '#ef4444', bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400', label: t.extremeRug };
+    }
+
+    function displayResult(data) {
+        const t = translations[currentLang];
+        const resultDiv = document.getElementById('result');
+        resultDiv.classList.remove('hidden');
+
+        const score = Math.round(data.trust_score || data.overall_score);
+        const riskConfig = getRiskConfig(score);
+
+        document.getElementById('tickerDisplay').innerText = "$" + data.ticker.toUpperCase();
+        document.getElementById('verdictDisplay').innerText = data.verdict;
+        
+        if (data.contract_address) {
+            const addr = data.contract_address;
+            const shortAddr = addr.substring(0,6) + '...' + addr.substring(addr.length-4);
+            document.getElementById('contractAddressDisplay').innerHTML = `<span id="contractLabel">${t.contract}</span><span class="text-white select-all" title="${addr}">${shortAddr}</span>`;
+        } else {
+            document.getElementById('contractAddressDisplay').innerHTML = `<span id="contractLabel">${t.contract}</span><span class="text-gray-500">${t.unknown}</span>`;
+        }
+
+        const circle = document.getElementById('scoreCircle');
+        const scoreVal = document.getElementById('scoreValue');
+        
+        circle.style.setProperty('--score-color', riskConfig.color);
+        
+        let currentScore = 0;
+        const targetScore = score;
+        const duration = 1500; 
+        const interval = 20;
+        const steps = duration / interval;
+        const stepValue = targetScore / steps;
+        
+        scoreVal.innerText = "0";
+        circle.style.setProperty('--score-deg', '0deg');
+        
+        const counter = setInterval(() => {
+            currentScore += stepValue;
+            if (currentScore >= targetScore) {
+                currentScore = targetScore;
+                clearInterval(counter);
             }
-        }
+            scoreVal.innerText = Math.round(currentScore);
+            const deg = (currentScore / 100) * 360;
+            circle.style.setProperty('--score-deg', `${deg}deg`);
+        }, interval);
 
-        async function fetchDexData(ticker) {
-            const maxRetries = 3;
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 8000);
-                    // Use local backend proxy
-                    const res = await fetch(`${API_BASE}/api/dex/search?q=${ticker}`, {
-                        signal: controller.signal
-                    });
-                    clearTimeout(timeout);
-                    const json = await res.json();
-                    if (!json.pairs || json.pairs.length === 0) return;
+        const badge = document.getElementById('riskBadge');
+        badge.innerText = data.risk_level || riskConfig.label;
+        document.getElementById('score_momentum').innerText = tc.momentum?.score ?? '--';
+        document.getElementById('score_volume').innerText = tc.volume?.score ?? '--';
+        document.getElementById('score_trade').innerText = tc.trade_pressure?.score ?? '--';
+        document.getElementById('score_liquidity').innerText = tc.liquidity?.score ?? '--';
+        
+        document.getElementById('onchainScoreTotal').innerText = breakdown.onchain?.total ?? '--';
+        const oc = breakdown.onchain?.components ?? {};
+        document.getElementById('score_holder').innerText = oc.holder?.score ?? '--';
+        document.getElementById('score_security').innerText = oc.security?.score ?? '--';
+        document.getElementById('score_whale').innerText = oc.whale_risk?.score ?? '--';
 
-                    let bestPair = json.pairs.find(p => p.chainId === 'solana') || json.pairs[0];
-                    renderDexData(bestPair);
-                    return; // Success, exit retry loop
-                } catch (e) {
-                    console.warn(`DexScreener attempt ${attempt}/${maxRetries} failed:`, e.message);
-                    if (attempt < maxRetries) {
-                        await new Promise(r => setTimeout(r, 1000 * attempt)); // Backoff
-                    } else {
-                        console.error("DexScreener fetch failed after all retries", e);
-                        // Show user-friendly message
-                        const section = document.getElementById('marketDataSection');
-                        if (section) {
-                            section.classList.remove('hidden');
-                            section.innerHTML = `<div class="text-center py-4 text-gray-400">
-                                <p>⚠️ Cannot load market data – check your internet connection</p>
-                            </div>`;
-                        }
-                    }
-                }
-            }
-        }
-
-        function renderDexData(pair) {
-            const section = document.getElementById('marketDataSection');
-            section.classList.remove('hidden');
-
-            // Data
-            const fmtNum = (val) => new Intl.NumberFormat('en-US', { notation: "compact" }).format(val);
-            document.getElementById('dexPrice').innerText = `$${pair.priceUsd || '0'}`;
-            document.getElementById('dexLiquidity').innerText = fmtNum(pair.liquidity?.usd || 0);
-
-            const change = pair.priceChange?.h24 || 0;
-            const changeEl = document.getElementById('dex24h');
-            changeEl.innerText = `${change}%`;
-            changeEl.className = `text-xl font-mono font-bold ${change >= 0 ? 'text-neon-green' : 'text-neon-red'}`;
-
-            // Age
-            const created = new Date(pair.pairCreatedAt);
-            const now = new Date();
-            const diffDays = Math.floor((now - created) / (86400000));
-            document.getElementById('dexAge').innerText = diffDays > 0 ? `${diffDays}d` : '<24h'; // Chart
-            document.getElementById('dexChart').innerHTML = ` <iframe
-    src="https://dexscreener.com/${pair.chainId}/${pair.pairAddress}?embed=1&theme=dark&trades=0&info=0" width="100%"
-    height="100%" style="border:0;"></iframe>`;
-
-            // Links
-            document.getElementById('dexLink').href = pair.url;
-            const addr = pair.baseToken.address;
-            document.getElementById('btnBuy').href = `https://jup.ag/swap/SOL-${addr}`;
-            document.getElementById('btnSell').href = `https://jup.ag/swap/${addr}-SOL`;
-            document.getElementById('btnSwap').href = `https://jup.ag/swap/SOL-${addr}`;
-        }
-
-        function generateMockData(ticker) {
-            const seed = ticker.length;
-            const score = (seed * 17) % 100;
-            return {
-                ticker: ticker,
-                overall_score: score,
-                risk_level: score < 40 ? "HIGH RISK" : "SAFE",
-                verdict: score > 50 ? "Community sentiment is bullish. On-chain metrics look clean." : "Warning: High bot activity and concentrated holders detected.",
-                tx_hash: "0xDEMO123...",
-                verify_url: "#",
-                details: {
-                    social_score: Math.min(100, score + 10),
-                    bot_score: Math.max(0, score - 15),
-                    holder_score: score,
-                    sentiment_score: Math.round((score + 10 + Math.max(0, score - 15)) / 2)
-                },
-                red_flags: score < 50 ? ["Mint Authority Active", "Top 10 hold 80%"] : [],
-                green_flags: score > 50 ? ["Liquidity Locked", "Active Community"] : []
-            };
-        }
-
-        function renderResult(data, isDemo = false) {
-            document.getElementById('result').classList.remove('hidden');
-            if (isDemo) document.getElementById('demoNotice').classList.remove('hidden');
-            else document.getElementById('demoNotice').classList.add('hidden');
-
-            // Header
-            document.getElementById('coinTicker').innerText = `$${data.ticker}`;
-            document.getElementById('verdictText').innerText = `"${data.verdict}"`;
-
-            // Score Gauge
-            const score = data.overall_score;
-            document.getElementById('scoreValue').innerText = score;
-            const scoreEl = document.getElementById('scoreCircle');
-            setTimeout(() => scoreEl.style.setProperty('--score-pct', `${score}%`), 100);
-
-            // Color Logic
-            let color = '#00FFA3'; // Green
-            if (score < 40) color = '#FF3B30'; // Red
-            else if (score < 70) color = '#FFCC00'; // Yellow
-
-            scoreEl.style.setProperty('--score-color', color);
-            document.getElementById('scoreValue').style.color = color;
-
-            // Badge
-            const badge = document.getElementById('riskBadge');
-            badge.innerText = data.risk_level;
-            badge.style.color = color;
-            badge.style.borderColor = color;
-
-            // Grid Scores
-            document.getElementById('socialScore').innerText = data.details.social_score;
-            document.getElementById('botScore').innerText = data.details.bot_score;
-            document.getElementById('holderScore').innerText = data.details.holder_score;
-            document.getElementById('sentimentScore').innerText = data.details.sentiment_score;
-
-            // Flags
-            const redList = document.getElementById('redFlagsList');
+        const redList = document.getElementById('redFlagsList');
+        if (redList) {
             redList.innerHTML = (data.red_flags || []).length ?
-                (data.red_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="x" class="w-4 h-4 text-danger flex-shrink-0"></i> ${f}</li>`).join('') :
-                '<li class="text-gray-600 italic">No critical issues found</li>';
+                (data.red_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="x" class="w-4 h-4 text-red-500 flex-shrink-0"></i> ${f}</li>`).join('') :
+                `<li class="text-gray-600 italic">${t.noRedFlags}</li>`;
+        }
 
-            const greenList = document.getElementById('greenFlagsList');
+        const greenList = document.getElementById('greenFlagsList');
+        if (greenList) {
             greenList.innerHTML = (data.green_flags || []).length ?
                 (data.green_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-primary flex-shrink-0"></i> ${f}</li>`).join('') :
-                '<li class="text-gray-600 italic">No positive signals</li>';
-
-            // Verification
-            if (data.tx_hash) {
-                const link = document.getElementById('verifyLink');
-                link.classList.remove('hidden');
-                link.classList.add('inline-flex');
-                link.href = data.verify_url || '#';
-                document.getElementById('txHash').innerText = data.tx_hash.substring(0, 10) + '...';
-            }
-
-            lucide.createIcons();
+                `<li class="text-gray-600 italic">${t.noGreenFlags}</li>`;
         }
-    </script>
-</body>
 
+        const ogBtn = document.getElementById('ogVerifyBtn');
+        if (data.tx_hash) {
+            ogBtn.href = data.verify_url;
+            ogBtn.classList.remove('opacity-50', 'pointer-events-none');
+            ogBtn.querySelector('span:last-child').innerHTML = `${t.aiBadgeLink} <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link w-3 h-3"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+        } else {
+            ogBtn.href = "#";
+            ogBtn.classList.add('opacity-50', 'pointer-events-none');
+            ogBtn.querySelector('span:last-child').innerText = 'Thuật toán chấm điểm (AI bảo trì)';
+            document.getElementById('aiBadgeTitle').innerText = 'CHẾ ĐỘ DỰ PHÒNG';
+            ogBtn.classList.remove('from-gray-900', 'to-black');
+            ogBtn.classList.add('from-blue-900/40', 'to-blue-950/40');
+        }
+
+        const txHashEl = document.getElementById('txHash');
+        if (txHashEl) {
+            txHashEl.innerText = data.tx_hash.substring(0, 10) + '...';
+        }
+
+        lucide.createIcons();
+    }
+</script>
+</body>
 </html>
