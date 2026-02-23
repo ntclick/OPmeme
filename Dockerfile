@@ -15,13 +15,18 @@ RUN useradd -m -u 1000 user
 # Copy the rest of the application with ownership
 COPY --chown=user:user . .
 
+# Create directory for sqlite database with write permissions
+RUN mkdir -p /app/data && chown user:user /app/data
+
 USER user
 ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
+    PATH=/home/user/.local/bin:$PATH \
+    DATABASE_URL=sqlite:////app/data/coincheckgo.db
 
-# Expose port (Optional documentation)
+# Expose ports (Railway usually uses 8080 or dynamic PORT)
+EXPOSE 8080
 EXPOSE 7860
 
-# Command to run the application using $PORT environment variable (default 7860)
+# Command to run the application using $PORT environment variable (default 8080 for Railway, 7860 for HF)
 # Use shell form to expand variable
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
