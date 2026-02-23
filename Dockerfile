@@ -23,8 +23,5 @@ ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
     DATABASE_URL=sqlite:////app/data/coincheckgo.db
 
-# Expose single port for Railway
-EXPOSE 8080
-
-# Command to run the application using $PORT environment variable
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Command to run the application using $PORT environment variable (bind to :: for IPv4/IPv6 support on Railway)
+CMD uvicorn main:app --host :: --port ${PORT:-8000}
