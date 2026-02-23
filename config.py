@@ -15,27 +15,33 @@ else:
     load_dotenv()  # fallback to default search
 
 # Database
-default_db_path = _here / "coincheckgo.db"
-try:
-    # Test if directory is writable
-    with open(default_db_path, "a") as f:
-        pass
-except (IOError, OSError):
-    import tempfile
-    default_db_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    DATABASE_URL = f"sqlite:///{_here / 'coincheckgo.db'}"
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{default_db_path}")
-
-# Ensure SQLite directory exists if using a file path
+# Ensure SQLite directory exists and is writable
 if DATABASE_URL.startswith("sqlite:///"):
     db_path = DATABASE_URL.replace("sqlite:///", "")
     if db_path and db_path != ":memory:":
+        # Convert relative to absolute
+        if db_path.startswith("./"):
+            db_path = str(_here / db_path[2:])
+        
         db_dir = os.path.dirname(db_path)
-        if db_dir and not os.path.exists(db_dir):
-            try:
+        
+        try:
+            # Try to create directory if it doesn't exist
+            if db_dir and not os.path.exists(db_dir):
                 os.makedirs(db_dir, exist_ok=True)
-            except Exception:
+            # Try to open/create the file to test write permissions
+            with open(db_path, "a") as f:
                 pass
+            DATABASE_URL = f"sqlite:///{db_path}"
+        except Exception:
+            # Fallback to /tmp if current path is read-only (like Railway without volumes)
+            import tempfile
+            fallback_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
+            DATABASE_URL = f"sqlite:///{fallback_path}"
 
 # Apify (Twitter scraping)
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
