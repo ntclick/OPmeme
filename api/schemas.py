@@ -129,6 +129,7 @@ class AnalyzeResponse(BaseModel):
     analyzed_at: datetime
     cached: bool = False
     opengradient_used: bool = False
+    model_used: Optional[str] = None
     algorithm_notes: list[str] = Field(default_factory=list)
     data_sources: dict[str, Any] = Field(default_factory=dict)
     force_refresh: bool = False

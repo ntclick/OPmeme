@@ -126,7 +126,7 @@ class SafeOpenGradientLLM(BaseChatModel):
                 messages=formatted_msgs,
                 max_tokens=800,
                 temperature=0.3,
-                x402_settlement_mode=og.x402SettlementMode.SETTLE_METADATA
+                x402_settlement_mode=og.x402SettlementMode.SETTLE_ONCHAIN
             )
         except Exception as e:
             logger_err = f"TEE SDK Error: {e}"
@@ -295,12 +295,12 @@ OUTPUT FORMAT - You MUST output valid JSON with this EXACT structure:
 {
   "ai_trust_score": <integer 0-100>,
   "ai_sentiment_score": <integer 0-100>,
-  "verdict": "<2-3 sentence expert crypto analysis using slang: FOMO, FUD, Jeet, Chad, Rug, Moon, Degen. Explain WHY the score makes sense for THIS token type>",
+  "verdict": "<2-3 short sentences in plain language for beginners. Avoid crypto slang. Explain what is good, what is risky, and what action a new investor should take>",
   "red_flags": ["<SPECIFIC, DETAILED concerns with NUMBERS. e.g., 'Top 3 wallets hold 67% of supply - whale risk' NOT just 'whale risk'>"],
   "green_flags": ["<SPECIFIC, DETAILED positives with NUMBERS. e.g., '12.4K organic tweets from 3.2K unique authors' NOT just 'good community'>"],
   "bot_likelihood": "<NONE | LOW | MEDIUM | HIGH | EXTREME>",
   "recommendation": "<AVOID | RISKY | DYOR | LOOKS_OK | BULLISH>",
-  "scoring_rationale": "<2-3 sentences explaining EXACTLY how you calculated the trust score based on token type, red flags, and green flags. Be specific: 'Started at 60 for large-cap, -15 for smart money selling, +10 for organic community = 55'>",
+  "scoring_rationale": "<2-3 short sentences using simple arithmetic and plain words. Example: 'Base 45 for established token, -20 for whale concentration, +5 for good liquidity, final 30'>",
   "twitter_real": <boolean true if you successfully extracted real tweets using your tool, false if not>,
   "onchain_real": <boolean true if you successfully analyzed real on-chain data, false if not>
 }
@@ -311,7 +311,7 @@ RULES:
 3. For NEW tokens: Be BRUTAL. Require PROOF of legitimacy. Most new meme coins are rugs.
 4. ALWAYS cite NUMBERS in red_flags and green_flags. Specific data points are required.
 5. If twitter_real=false or onchain_real=false, note this in red_flags and be more conservative.
-6. Use crypto slang naturally but explain the reasoning clearly.
+6. Use beginner-friendly language. No jargon, no slang, no memes.
 7. Output ONLY the JSON object, nothing else before or after.
 """
 
@@ -499,9 +499,15 @@ class OpenGradientAnalyzer:
             }
 
         # Calculate token type for fallback handling
-        holder_count = on_chain_data.get("holders", {}).get("total_holders", 0) if on_chain_data else 0
-        token_age_hours = on_chain_data.get("token_info", {}).get("age_hours", 0) if on_chain_data else 0
-        liquidity_usd = on_chain_data.get("liquidity_usd", 0) if on_chain_data else 0
+        def _as_float(value, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        holder_count = int(_as_float(on_chain_data.get("holders", {}).get("total_holders", 0), 0.0)) if on_chain_data else 0
+        token_age_hours = _as_float(on_chain_data.get("token_info", {}).get("age_hours", 0), 0.0) if on_chain_data else 0.0
+        liquidity_usd = _as_float(on_chain_data.get("liquidity_usd", 0), 0.0) if on_chain_data else 0.0
         
         is_established = holder_count > 10000 or token_age_hours > 720
         is_large_cap = liquidity_usd > 1000000 or holder_count > 50000
@@ -531,6 +537,7 @@ class OpenGradientAnalyzer:
                 messages=messages,
                 max_tokens=2000,
                 temperature=0.1,  # Low temp for consistent structured output
+                x402_settlement_mode=self._og.x402SettlementMode.SETTLE_ONCHAIN,
             )
             
             raw_output = completion.chat_output.get("content", "") if completion.chat_output else ""

@@ -549,6 +549,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "analyzed_at": datetime.utcnow(),
             "cached": False,
             "opengradient_used": ai_result.get("used_opengradient", False),
+            "model_used": ai_result.get("model_cid") or ai_result.get("model_used"),
             "algorithm_notes": [
                 f"Scoring: v3.1 (Technical 65% / On-Chain 35%) - Chain: {chain_type.upper()}",
                 "Social: DISABLED",

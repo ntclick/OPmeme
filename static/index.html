@@ -428,6 +428,7 @@
 
                     <div class="flex flex-col items-start gap-1 mb-4 h-[44px] justify-end">
                         <span class="text-sm font-bold text-white">Trust Framework v3.1</span>
+                        <span id="aiModelInfo" class="text-[11px] font-mono text-secondary/80">Model: --</span>
                     </div>
 
                     <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm text-gray-400">
@@ -494,7 +495,7 @@
             heroTitle2: 'Buy ',
             heroTitleAlpha: 'Alpha',
             heroTitleAvoid: '. Avoid ',
-            heroTitleRugs: 'Rugs',
+            heroTitleRugs: 'Rug Pull',
             heroTitleScams: ' & Scams.',
             heroDesc: 'Technical & On-Chain Analysis powered by OpenGradient AI. Real-time auditing for Solana tokens.',
             searchPlaceholder: 'Enter token symbol or contract address...',
@@ -512,6 +513,7 @@
             aiBadgeTitle: 'Verifiable AI Audit',
             aiBadgeLink: 'View on OpenGradient',
             aiBadgePending: 'AI Verification Pending',
+            modelLabel: 'Model',
             scoreBreakdown: 'Score Breakdown',
             techTitle: 'Technical',
             momentum: 'Momentum',
@@ -568,6 +570,7 @@
             aiBadgeTitle: 'Kiểm định AI có thể xác minh',
             aiBadgeLink: 'Xem trên OpenGradient',
             aiBadgePending: 'Chờ xác minh AI',
+            modelLabel: 'Mô hình',
             scoreBreakdown: 'Chi tiết Điểm số',
             techTitle: 'Kỹ thuật',
             momentum: 'Đà tăng',
@@ -635,6 +638,7 @@
         
         document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
         document.getElementById('aiBadgeLinkText').innerText = t.aiBadgeLink;
+        document.getElementById('aiModelInfo').innerText = `${t.modelLabel}: --`;
         
         document.getElementById('scoreBreakdownTitle').innerText = t.scoreBreakdown;
         document.getElementById('techTitleText').innerText = t.techTitle;
@@ -824,6 +828,8 @@
         const t = translations[currentLang];
         const resultDiv = document.getElementById('result');
         resultDiv.classList.remove('hidden');
+        const modelUsed = data.model_used || '--';
+        document.getElementById('aiModelInfo').innerText = `${t.modelLabel}: ${modelUsed}`;
 
         const score = Math.round(data.trust_score || data.overall_score);
         const riskConfig = getRiskConfig(score);
@@ -897,21 +903,25 @@
         }
 
         const ogBtn = document.getElementById('ogVerifyBtn');
+        const aiBadgeLinkText = document.getElementById('aiBadgeLinkText');
         if (data.tx_hash) {
             ogBtn.href = data.verify_url;
             ogBtn.classList.remove('opacity-50', 'pointer-events-none');
-            ogBtn.querySelector('span:last-child').innerHTML = `${t.aiBadgeLink} <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link w-3 h-3"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+            document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
+            aiBadgeLinkText.innerHTML = `${t.aiBadgeLink}${data.model_used ? ` (${data.model_used})` : ''} <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link w-3 h-3"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
         } else if (data.opengradient_used) {
             ogBtn.href = "#";
             ogBtn.classList.add('opacity-50', 'pointer-events-none');
-            ogBtn.querySelector('span:last-child').innerText = 'AI verified (no transfer tx hash)';
+            aiBadgeLinkText.innerText = data.model_used
+                ? `AI verified (${data.model_used}, no tx hash)`
+                : 'AI verified (no tx hash)';
             document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
             ogBtn.classList.remove('from-blue-900/40', 'to-blue-950/40');
             ogBtn.classList.add('from-gray-900', 'to-black');
         } else {
             ogBtn.href = "#";
             ogBtn.classList.add('opacity-50', 'pointer-events-none');
-            ogBtn.querySelector('span:last-child').innerText = 'Thuật toán chấm điểm (AI bảo trì)';
+            aiBadgeLinkText.innerText = 'Thuật toán chấm điểm (AI bảo trì)';
             document.getElementById('aiBadgeTitle').innerText = 'CHẾ ĐỘ DỰ PHÒNG';
 
             ogBtn.classList.remove('from-gray-900', 'to-black');
