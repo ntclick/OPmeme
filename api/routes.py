@@ -206,6 +206,11 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                             chain_pairs = [p for p in pairs if p.get("baseToken", {}).get("address", "").lower() == contract_address.lower()]
                             if chain_pairs:
                                 dex_data = max(chain_pairs, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0)
+                                # Canonicalize address for case-sensitive chains (Solana base58)
+                                base_addr = _safe_get(dex_data, "baseToken", "address")
+                                if base_addr and contract_address and chain_type == "solana" and base_addr != contract_address:
+                                    logger.info(f"🔧 Normalized Solana address from input to canonical mint: {base_addr[:8]}...")
+                                    contract_address = base_addr
                                 created = dex_data.get("pairCreatedAt", 0)
                                 if created:
                                     token_age_hours = (time.time() * 1000 - created) / (1000 * 3600)
@@ -255,8 +260,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 except Exception as e:
                     logger.warning(f"⚠️ EVM scraper failed: {e}")
         
-        # Use DexScreener data if Birdeye not available (for EVM)
-        if not birdeye_data and dex_data:
+        # Use DexScreener-derived market fields as fallback only for EVM chains.
+        # For Solana we keep Birdeye empty when Birdeye is unavailable so the source is explicit.
+        if chain_type == "evm" and not birdeye_data and dex_data:
             # Extract what we can from DexScreener
             birdeye_data = {
                 "market_cap": dex_data.get("marketCap", 0) or dex_data.get("fdv", 0),
