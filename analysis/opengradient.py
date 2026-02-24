@@ -19,6 +19,13 @@ import uuid
 
 # NOTE: DNS resolution and SSL handled by system - no custom patching needed
 
+# Set Firebase API Key for OpenGradient SDK if provided
+from config import OPENGRADIENT_FIREBASE_API_KEY
+if OPENGRADIENT_FIREBASE_API_KEY:
+    import opengradient.client.model_hub as model_hub
+    if hasattr(model_hub, '_FIREBASE_CONFIG'):
+        model_hub._FIREBASE_CONFIG = {"apiKey": OPENGRADIENT_FIREBASE_API_KEY}
+
 import opengradient as og
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent

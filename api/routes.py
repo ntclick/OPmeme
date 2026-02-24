@@ -225,8 +225,22 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             
             # 2. Chain-specific data fetching
             if chain_type == "solana":
-                # Birdeye (Solana only)
-                logger.info(f"🐦 Fetching Birdeye for address: {contract_address}")
+                # Solana RPC FIRST - to resolve the mint address (Birdeye needs Base58)
+                logger.info(f"� Fetching Solana RPC for: {contract_address}")
+                try:
+                    token_info = await solana_scraper.get_token_info(contract_address) or {}
+                    holder_data = await solana_scraper.get_top_holders(contract_address) or {}
+                    # Resolve mint address - Birdeye requires Base58 format
+                    resolved_mint = token_info.get("mint")
+                    if resolved_mint and resolved_mint != contract_address:
+                        logger.info(f"🔧 Solana RPC resolved mint: {contract_address[:8]}... → {resolved_mint[:8]}...")
+                        contract_address = resolved_mint
+                    logger.info(f"✅ Solana RPC: mint_renounced={token_info.get('is_mint_renounced')}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Solana RPC failed: {e}")
+                
+                # Birdeye (Solana only) - AFTER address is resolved
+                logger.info(f"� Fetching Birdeye for address: {contract_address}")
                 try:
                     raw = await birdeye_client.get_token_overview(contract_address)
                     if raw:
@@ -238,20 +252,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                         logger.info(f"✅ Birdeye: MC=${mc:,.0f}, Holders={holders:,}, Vol=${vol:,.0f}")
                 except Exception as e:
                     logger.warning(f"⚠️ Birdeye failed: {e}")
-                
-                # Solana RPC  
-                logger.info(f"🔗 Fetching Solana RPC for: {contract_address}")
-                try:
-                    token_info = await solana_scraper.get_token_info(contract_address) or {}
-                    holder_data = await solana_scraper.get_top_holders(contract_address) or {}
-                    # Ensure consistent address usage - use the resolved mint from token_info if available
-                    resolved_mint = token_info.get("mint")
-                    if resolved_mint and resolved_mint != contract_address:
-                        logger.info(f"🔧 Solana RPC resolved mint: {contract_address[:8]}... → {resolved_mint[:8]}...")
-                        contract_address = resolved_mint
-                    logger.info(f"✅ Solana RPC: mint_renounced={token_info.get('is_mint_renounced')}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Solana RPC failed: {e}")
                     
             elif chain_type == "evm":
                 # EVM-specific data
