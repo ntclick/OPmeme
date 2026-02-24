@@ -396,50 +396,32 @@ class OpenGradientAnalyzer:
                 from opengradient.client.opg_token import ensure_opg_approval
                 logger.info("🔍 Checking OPG approval...")
                 
-                # Get wallet from client
-                wallet = None
-                for attr_name in ['_wallet', 'wallet', '__wallet']:
-                    if hasattr(self._client, attr_name):
-                        wallet = getattr(self._client, attr_name)
-                        logger.info(f"✅ Found wallet at client.{attr_name}")
-                        break
-                
-                if not wallet:
-                    # Check private attributes
-                    for attr in dir(self._client):
-                        if 'wallet' in attr.lower() and not attr.startswith('__'):
-                            wallet = getattr(self._client, attr, None)
-                            if wallet:
-                                logger.info(f"✅ Found wallet at client.{attr}")
-                                break
-                
-                if not wallet:
-                    logger.warning("⚠️ Could not find wallet in client")
-                    # List all client attributes for debugging
-                    logger.info("Client attributes:")
-                    for attr in dir(self._client):
-                        if not attr.startswith('__'):
-                            logger.info(f"  {attr}: {type(getattr(self._client, attr, None))}")
-                
-                if wallet:
-                    try:
-                        approval = ensure_opg_approval(wallet, opg_amount=5.0)
-                        if approval.tx_hash:
-                            logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
-                        else:
-                            logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Permit2 approval error: {e}")
-                        # Try with client.llm.ensure_opg_approval if available
-                        if hasattr(self._client.llm, 'ensure_opg_approval'):
-                            logger.info("🔄 Trying client.llm.ensure_opg_approval...")
-                            try:
-                                approval = self._client.llm.ensure_opg_approval(opg_amount=5.0)
-                                logger.info(f"✅ [PERMIT2] Client approval: {approval}")
-                            except Exception as e2:
-                                logger.warning(f"⚠️ Client approval failed: {e2}")
-                else:
-                    logger.warning("⚠️ No wallet found for OPG approval")
+                # Use client.llm.ensure_opg_approval directly (preferred method)
+                try:
+                    logger.info("🔍 Checking OPG approval via client.llm...")
+                    approval = self._client.llm.ensure_opg_approval(opg_amount=5.0)
+                    if approval.tx_hash:
+                        logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
+                    else:
+                        logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Permit2 approval failed: {e}")
+                    # Fallback: try to get wallet and use standalone function
+                    logger.info("🔄 Trying fallback with wallet object...")
+                    
+                    # Get wallet from client.llm._wallet_account
+                    if hasattr(self._client.llm, '_wallet_account'):
+                        wallet = self._client.llm._wallet_account
+                        try:
+                            approval = ensure_opg_approval(wallet, opg_amount=5.0)
+                            if approval.tx_hash:
+                                logger.info(f"✅ [PERMIT2] Fallback approval TX: {approval.tx_hash}")
+                            else:
+                                logger.info(f"✅ [PERMIT2] Fallback already approved: {approval.allowance_before}")
+                        except Exception as e2:
+                            logger.warning(f"⚠️ Fallback approval failed: {e2}")
+                    else:
+                        logger.warning("⚠️ Could not find wallet in client.llm")
                     
             except Exception as e:
                 logger.warning(f"⚠️ Permit2 approval failed: {e}")
