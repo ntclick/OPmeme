@@ -232,9 +232,10 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     if raw:
                         birdeye_data = birdeye_client.extract_scores_from_overview(raw)
                         birdeye_data["raw"] = raw
-                        logger.info(f"✅ Birdeye: MC=${birdeye_data.get('market_cap', 0):,.0f}, "
-                                   f"Holders={birdeye_data.get('holder_count', 0)}, "
-                                   f"Vol=${birdeye_data.get('volume_24h', 0):,.0f}")
+                        mc = birdeye_data.get('market_cap') or 0
+                        holders = birdeye_data.get('holder_count') or 0
+                        vol = birdeye_data.get('volume_24h') or 0
+                        logger.info(f"✅ Birdeye: MC=${mc:,.0f}, Holders={holders:,}, Vol=${vol:,.0f}")
                 except Exception as e:
                     logger.warning(f"⚠️ Birdeye failed: {e}")
                 

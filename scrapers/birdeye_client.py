@@ -250,22 +250,36 @@ class BirdeyeClient:
         Extract key metrics for scoring from token_overview response.
         
         This is the main method used by routes.py to get structured data.
+        
+        Birdeye API field names (from docs):
+        - holder: number of holders
+        - marketCap / mc: market cap (both may exist)
+        - liquidity: liquidity in USD
+        - v24hUSD: volume 24h in USD
+        - priceChange1hPercent: 1h price change %
+        - priceChange24hPercent: 24h price change %
         """
         if not overview:
             return {}
         
-        # Safe extraction with defaults
-        volume_24h = overview.get("v24hUSD") or 0
-        buy_volume = overview.get("vBuy24hUSD") or 0
-        sell_volume = overview.get("vSell24hUSD") or 0
+        # Safe extraction with defaults - handle both field name variants
+        volume_24h = overview.get("v24hUSD") or overview.get("v24h") or 0
+        buy_volume = overview.get("vBuy24hUSD") or overview.get("vBuy24h") or 0
+        sell_volume = overview.get("vSell24hUSD") or overview.get("vSell24h") or 0
         buys = overview.get("buy24h") or 0
         sells = overview.get("sell24h") or 1  # Avoid division by zero
+        
+        # Market cap - check both field names
+        market_cap = overview.get("marketCap") or overview.get("mc") or 0
+        
+        # Liquidity - check both field names
+        liquidity = overview.get("liquidity") or overview.get("liquidityUsd") or 0
         
         return {
             # Market Data
             "price": overview.get("price"),
-            "liquidity": overview.get("liquidity"),
-            "market_cap": overview.get("mc"),
+            "liquidity": liquidity,
+            "market_cap": market_cap,
             
             # Holders (UNIQUE to Birdeye!)
             "holder_count": overview.get("holder"),
