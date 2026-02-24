@@ -23,8 +23,11 @@ if not DATABASE_URL:
     DATABASE_URL = f"sqlite:///{fallback_path}"
 
 # Ensure SQLite directory exists and is writable
-if DATABASE_URL.startswith("sqlite:///"):
-    db_path = DATABASE_URL.replace("sqlite:///", "")
+if DATABASE_URL.startswith("sqlite:///") or DATABASE_URL.startswith("sqlite:////"):
+    if DATABASE_URL.startswith("sqlite:////"):
+        db_path = "/" + DATABASE_URL.replace("sqlite:////", "", 1)
+    else:
+        db_path = DATABASE_URL.replace("sqlite:///", "", 1)
     if db_path and db_path != ":memory:":
         # Convert relative to absolute
         if db_path.startswith("./"):
