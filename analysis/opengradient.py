@@ -386,23 +386,20 @@ class OpenGradientAnalyzer:
         self._og = None
         self._memsync = MemSyncClient()
         self._initialized = False
+        self._init_error = None
 
         private_key = _resolve_private_key()
         if not private_key:
-            logger.warning(
-                "OPENGRADIENT_PRIVATE_KEY/OG_PRIVATE_KEY not set and ~/.opengradient_config.json "
-                "not found — AI fallback only. Run: opengradient config init"
-            )
+            self._init_error = "OPENGRADIENT_PRIVATE_KEY not set"
+            logger.warning(f"❌ OpenGradient init failed: {self._init_error}")
             return
 
         # Get email and password for new SDK API
         from config import OPENGRADIENT_EMAIL, OPENGRADIENT_PASSWORD
         
         if not OPENGRADIENT_EMAIL or not OPENGRADIENT_PASSWORD:
-            logger.warning(
-                "OPENGRADIENT_EMAIL or OPENGRADIENT_PASSWORD not set — "
-                "AI fallback only. Get credentials at https://hub.opengradient.ai"
-            )
+            self._init_error = "OPENGRADIENT_EMAIL or OPENGRADIENT_PASSWORD not set in environment"
+            logger.warning(f"❌ OpenGradient init failed: {self._init_error}")
             return
 
         try:
@@ -426,12 +423,13 @@ class OpenGradientAnalyzer:
             self._twitter_scraper = TwitterScraper()
 
             logger.info(
-                f"OpenGradient SDK initialized — key: "
+                f"✅ OpenGradient SDK initialized — key: "
                 f"{private_key[:6]}...{private_key[-4:]}, email: {OPENGRADIENT_EMAIL}"
             )
             logger.info(f"OpenGradient model selected: {self._selected_model}")
         except Exception as e:
-            logger.warning(f"OpenGradient SDK not available (will use fallback): {e}")
+            self._init_error = str(e)
+            logger.error(f"❌ OpenGradient SDK init failed: {e}")
 
     def _submit_alpha_signal(self, ticker: str, ai_result: dict) -> Optional[str]:
         """
@@ -528,7 +526,8 @@ class OpenGradientAnalyzer:
         algo_score = scoring_result.get("overall_score", 50)
 
         if not self._initialized:
-            logger.warning("OpenGradient not initialized — AI disabled")
+            error_msg = self._init_error or "OpenGradient SDK not initialized"
+            logger.error(f"❌ OpenGradient failed: {error_msg}")
             return {
                 "ai_result": None,
                 "tx_hash": None,
@@ -536,7 +535,7 @@ class OpenGradientAnalyzer:
                 "model_cid": None,
                 "raw_output": None,
                 "used_opengradient": False,
-                "error": "OpenGradient SDK not initialized",
+                "error": error_msg,
             }
 
         # Calculate token type for fallback handling
