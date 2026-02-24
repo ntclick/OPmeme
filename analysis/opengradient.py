@@ -602,26 +602,21 @@ class OpenGradientAnalyzer:
             # Extract from completion object
             tx_hash = getattr(completion, 'transaction_hash', None)
             finish_reason = getattr(completion, 'finish_reason', None)
-            message = getattr(completion, 'message', None) or getattr(completion, 'content', None)
+            chat_output = getattr(completion, 'chat_output', None)
             
-            # Extract content from message
-            if isinstance(message, dict):
-                raw_output = message.get("content", "")
+            # Extract content from SDK chat_output
+            # New SDK returns TextGenerationOutput(chat_output=<dict|str>, transaction_hash=...)
+            if isinstance(chat_output, dict):
+                raw_output = chat_output.get("content", "")
             else:
-                raw_output = str(message) if message else ""
+                raw_output = str(chat_output) if chat_output else ""
             
             # Log what we got for debugging
             logger.info(f"🔍 [METHOD A] Got TX: {tx_hash} (type: {type(tx_hash)})")
             logger.info(f"🔍 [METHOD A] Settlement mode used: {settlement_mode}")
             
-            if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
-                # If we got "external", try to get OPG tokens first
-                if tx_hash == "external":
-                    logger.warning("⚠️ Got 'external' tx - OPG approval may be missing")
-                    # Don't raise error, just log and continue with fallback
-                    pass
-                else:
-                    raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
+            if self.REQUIRE_X402_TX and tx_hash and tx_hash != "external" and not _has_real_tx_hash(tx_hash):
+                raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
             
             logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}, finish: {finish_reason}")
             logger.info(f"📝 Raw output: {raw_output[:300]}...")
@@ -638,7 +633,7 @@ class OpenGradientAnalyzer:
                     logger.info(f"✅ [OPENGRADIENT] Method A Success - trust={ai_result.get('ai_trust_score')}")
                     return {
                         "ai_result": ai_result,
-                        "tx_hash": tx_hash,
+                        "tx_hash": tx_hash if _has_real_tx_hash(tx_hash) else None,
                         "transaction_hash": tx_hash,
                         "model_cid": self._selected_model,
                         "raw_output": raw_output,
@@ -652,20 +647,6 @@ class OpenGradientAnalyzer:
                 
         except Exception as e:
             logger.warning(f"[METHOD A] Failed: {e}, trying fallback...")
-
-        if self.REQUIRE_X402_TX:
-            error_msg = "x402 tx hash required but OpenGradient direct call did not return a valid on-chain tx"
-            logger.error(error_msg)
-            return {
-                "ai_result": None,
-                "tx_hash": None,
-                "transaction_hash": None,
-                "model_cid": self._selected_model,
-                "raw_output": None,
-                "model_used": f"Direct LLM.chat()/{self._selected_model}",
-                "used_opengradient": False,
-                "error": error_msg,
-            }
 
         # ════════════════════════════════════════════════════════════════════════
         # METHOD B: LangChain ReAct Agent - Fallback approach
