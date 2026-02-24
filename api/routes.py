@@ -405,11 +405,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             scoring_result=scores_context
         )
 
-        # Strict mode: caller requires verifiable x402 on-chain transaction hash.
+        # OpenGradient inference result
         ai_error = ai_result.get("error") if isinstance(ai_result, dict) else None
-        if isinstance(ai_error, str) and "x402 tx hash required" in ai_error.lower():
-            raise HTTPException(status_code=502, detail=ai_error)
-        
         ai_trust_score = None
         ai_inference_success = False
         tx_hash = None
