@@ -395,43 +395,39 @@ class OpenGradientAnalyzer:
             )
             return
 
+        # Get email and password for new SDK API
+        from config import OPENGRADIENT_EMAIL, OPENGRADIENT_PASSWORD
+        
+        if not OPENGRADIENT_EMAIL or not OPENGRADIENT_PASSWORD:
+            logger.warning(
+                "OPENGRADIENT_EMAIL or OPENGRADIENT_PASSWORD not set — "
+                "AI fallback only. Get credentials at https://hub.opengradient.ai"
+            )
+            return
+
         try:
             self._og = og
             
-            self._client = og.Client(
+            # NEW SDK API: og.init() with email + password
+            og.init(
                 private_key=private_key,
+                email=OPENGRADIENT_EMAIL,
+                password=OPENGRADIENT_PASSWORD
             )
             self._initialized = True
 
             self._selected_model = _pick_best_model_enum(self._og, self.MODEL_FALLBACK)
             
             # Init LLM via custom safe adapter
-            self._llm = SafeOpenGradientLLM(client=self._client, model_enum=self._selected_model)
+            self._llm = SafeOpenGradientLLM(client=None, model_enum=self._selected_model)
             
             # Init tools
             self._solana_scraper = SolanaScraper()
             self._twitter_scraper = TwitterScraper()
 
-            # Ensure Permit2 has enough OPG allowance (SDK built-in method)
-            # 18 decimals → fee per request ≈ 0.000001 OPG, so 5.0 is very generous
-            try:
-                if hasattr(self._client.llm, "ensure_opg_approval"):
-                    approval = self._client.llm.ensure_opg_approval(opg_amount=5.0)
-                    if approval.tx_hash:
-                        logger.info(f"✅ [PERMIT2] Approval TX sent: {approval.tx_hash}")
-                    else:
-                        logger.info(
-                            f"OPG Permit2 allowance: before={approval.allowance_before}, "
-                            f"after={approval.allowance_after}"
-                        )
-                else:
-                    logger.debug("SDK version does not support ensure_opg_approval (skipped)")
-            except Exception as e:
-                logger.warning(f"Permit2 approval check: {e} (may already be approved)")
-
             logger.info(
                 f"OpenGradient SDK initialized — key: "
-                f"{private_key[:6]}...{private_key[-4:]}"
+                f"{private_key[:6]}...{private_key[-4:]}, email: {OPENGRADIENT_EMAIL}"
             )
             logger.info(f"OpenGradient model selected: {self._selected_model}")
         except Exception as e:
@@ -565,10 +561,10 @@ class OpenGradientAnalyzer:
             token_type = "new"
 
         # ════════════════════════════════════════════════════════════════════════
-        # METHOD A: Direct client.llm.chat() - Primary approach
+        # METHOD A: Direct og.llm_chat() - New SDK API
         # ════════════════════════════════════════════════════════════════════════
         try:
-            logger.info(f"🧠 [METHOD A] Running direct OpenGradient LLM.chat()...")
+            logger.info(f"🧠 [METHOD A] Running og.llm_chat()...")
             
             # Build messages for direct chat
             messages = [
@@ -576,22 +572,34 @@ class OpenGradientAnalyzer:
                 {"role": "user", "content": input_text}
             ]
             
-            settlement_mode = _resolve_settlement_mode(self._og.x402SettlementMode)
-            # Call direct LLM chat with TEE
-            completion = self._client.llm.chat(
-                model=getattr(self._og.TEE_LLM, self._selected_model),
+            # NEW SDK API: og.llm_chat() returns tuple (tx_hash, finish_reason, message)
+            # Try TEE_LLM first, fallback to LLM
+            model_cid = None
+            if hasattr(og.TEE_LLM, self._selected_model):
+                model_cid = getattr(og.TEE_LLM, self._selected_model)
+            elif hasattr(og.LLM, self._selected_model):
+                model_cid = getattr(og.LLM, self._selected_model)
+            else:
+                model_cid = og.LLM.GPT_4O  # Default fallback
+            
+            # Call new API
+            tx_hash, finish_reason, message = og.llm_chat(
+                model_cid=model_cid,
                 messages=messages,
                 max_tokens=2000,
-                temperature=0.1,  # Low temp for consistent structured output
-                x402_settlement_mode=settlement_mode or self._og.x402SettlementMode.SETTLE_METADATA,
+                temperature=0.1,
             )
             
-            raw_output = completion.chat_output.get("content", "") if completion.chat_output else ""
-            tx_hash = completion.transaction_hash
+            # Extract content from message
+            if isinstance(message, dict):
+                raw_output = message.get("content", "")
+            else:
+                raw_output = str(message) if message else ""
+            
             if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
                 raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
             
-            logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}")
+            logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}, finish: {finish_reason}")
             logger.info(f"📝 Raw output: {raw_output[:300]}...")
             
             if raw_output:

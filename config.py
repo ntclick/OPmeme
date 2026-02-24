@@ -50,6 +50,8 @@ APIFY_TWITTER_ACTOR_ID = os.getenv("APIFY_TWITTER_ACTOR_ID", "nfp1fpt5gUlBwPcor"
 # OpenGradient (Verifiable AI)
 # Prefer OPENGRADIENT_PRIVATE_KEY, fallback to OG_PRIVATE_KEY used in official examples
 OPENGRADIENT_PRIVATE_KEY = os.getenv("OPENGRADIENT_PRIVATE_KEY") or os.getenv("OG_PRIVATE_KEY")
+OPENGRADIENT_EMAIL = os.getenv("OPENGRADIENT_EMAIL", "")
+OPENGRADIENT_PASSWORD = os.getenv("OPENGRADIENT_PASSWORD", "")
 
 # MemSync (Long-term memory)
 MEMSYNC_API_KEY = os.getenv("MEMSYNC_API_KEY")
