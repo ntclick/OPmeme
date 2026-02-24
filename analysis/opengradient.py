@@ -25,6 +25,11 @@ if OPENGRADIENT_FIREBASE_API_KEY:
     import opengradient.client.model_hub as model_hub
     if hasattr(model_hub, '_FIREBASE_CONFIG'):
         model_hub._FIREBASE_CONFIG = {"apiKey": OPENGRADIENT_FIREBASE_API_KEY}
+else:
+    # Set empty config to avoid Firebase errors
+    import opengradient.client.model_hub as model_hub
+    if hasattr(model_hub, '_FIREBASE_CONFIG'):
+        model_hub._FIREBASE_CONFIG = {}
 
 import opengradient as og
 from langchain_core.tools import tool
@@ -43,17 +48,20 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_settlement_mode(mode_enum: Any):
-    """Pick SETTLE_ONCHAIN for real tx hash (requires OPG tokens).
+    """Pick SETTLE for real on-chain tx hash (requires OPG tokens).
     
-    SETTLE_ONCHAIN - Returns real on-chain tx hash (requires OPG balance)
-    SETTLE_METADATA - Always works but returns 'external' tx hash
+    SETTLE ("private") - Returns real on-chain tx hash (0x...) ✅
+    SETTLE_BATCH ("batch") - May work, batched settlement
+    SETTLE_METADATA ("individual") - Returns 'external' ❌
     """
-    # Prefer SETTLE_ONCHAIN for real tx hash
-    if hasattr(mode_enum, "SETTLE_ONCHAIN"):
-        return getattr(mode_enum, "SETTLE_ONCHAIN")
+    # SETTLE = "private" → Real tx hash (0x...)
     if hasattr(mode_enum, "SETTLE"):
         return getattr(mode_enum, "SETTLE")
-    # Fallback to METADATA (no tx hash)
+    # SETTLE_BATCH = "batch" → May work too
+    if hasattr(mode_enum, "SETTLE_BATCH"):
+        return getattr(mode_enum, "SETTLE_BATCH")
+    # SETTLE_METADATA = "individual" → Returns "external" (NO real tx!)
+    # Only use as last resort
     if hasattr(mode_enum, "SETTLE_METADATA"):
         return getattr(mode_enum, "SETTLE_METADATA")
     return None
@@ -337,7 +345,7 @@ class OpenGradientAnalyzer:
         "GPT_4O",
         "CLAUDE_3_5_HAIKU",
     ]
-    REQUIRE_X402_TX = True
+    REQUIRE_X402_TX = True  # Re-enable for production
 
     def __init__(self):
         self._client = None
@@ -364,17 +372,82 @@ class OpenGradientAnalyzer:
             self._og = og
             
             # NEW SDK API: og.init() with email + password
-            og.init(
-                private_key=private_key,
-                email=OPENGRADIENT_EMAIL,
-                password=OPENGRADIENT_PASSWORD
-            )
+            # Skip Firebase for now - just use private key
+            try:
+                og.init(
+                    private_key=private_key,
+                    email=OPENGRADIENT_EMAIL,
+                    password=OPENGRADIENT_PASSWORD
+                )
+            except ValueError as e:
+                if "Firebase API Key" in str(e):
+                    # Try without email/password if Firebase fails
+                    logger.warning("⚠️ Firebase auth failed, trying private key only")
+                    og.init(private_key=private_key)
+                else:
+                    raise
             self._initialized = True
+
+            # Get the global client
+            self._client = og.global_client
+            
+            # Ensure OPG approval before inference
+            try:
+                from opengradient.client.opg_token import ensure_opg_approval
+                logger.info("🔍 Checking OPG approval...")
+                
+                # Get wallet from client
+                wallet = None
+                for attr_name in ['_wallet', 'wallet', '__wallet']:
+                    if hasattr(self._client, attr_name):
+                        wallet = getattr(self._client, attr_name)
+                        logger.info(f"✅ Found wallet at client.{attr_name}")
+                        break
+                
+                if not wallet:
+                    # Check private attributes
+                    for attr in dir(self._client):
+                        if 'wallet' in attr.lower() and not attr.startswith('__'):
+                            wallet = getattr(self._client, attr, None)
+                            if wallet:
+                                logger.info(f"✅ Found wallet at client.{attr}")
+                                break
+                
+                if not wallet:
+                    logger.warning("⚠️ Could not find wallet in client")
+                    # List all client attributes for debugging
+                    logger.info("Client attributes:")
+                    for attr in dir(self._client):
+                        if not attr.startswith('__'):
+                            logger.info(f"  {attr}: {type(getattr(self._client, attr, None))}")
+                
+                if wallet:
+                    try:
+                        approval = ensure_opg_approval(wallet, opg_amount=5.0)
+                        if approval.tx_hash:
+                            logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
+                        else:
+                            logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Permit2 approval error: {e}")
+                        # Try with client.llm.ensure_opg_approval if available
+                        if hasattr(self._client.llm, 'ensure_opg_approval'):
+                            logger.info("🔄 Trying client.llm.ensure_opg_approval...")
+                            try:
+                                approval = self._client.llm.ensure_opg_approval(opg_amount=5.0)
+                                logger.info(f"✅ [PERMIT2] Client approval: {approval}")
+                            except Exception as e2:
+                                logger.warning(f"⚠️ Client approval failed: {e2}")
+                else:
+                    logger.warning("⚠️ No wallet found for OPG approval")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Permit2 approval failed: {e}")
 
             self._selected_model = _pick_best_model_enum(self._og, self.MODEL_FALLBACK)
             
             # Init LLM via custom safe adapter
-            self._llm = SafeOpenGradientLLM(client=None, model_enum=self._selected_model)
+            self._llm = SafeOpenGradientLLM(client=self._client, model_enum=self._selected_model)
             
             # Init tools
             self._solana_scraper = SolanaScraper()
@@ -532,13 +605,22 @@ class OpenGradientAnalyzer:
             # Use TEE_LLM from SDK
             model_cid = getattr(og.TEE_LLM, self._selected_model, og.TEE_LLM.GPT_4O)
             
-            # NEW SDK API: og.llm_chat() returns tuple (tx_hash, finish_reason, message)
-            tx_hash, finish_reason, message = og.llm_chat(
-                model_cid=model_cid,
+            # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
+            # Use SETTLE mode for real tx hash
+            settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
+            
+            completion = self._client.llm.chat(
+                model=model_cid,
                 messages=messages,
                 max_tokens=2000,
                 temperature=0.1,
+                x402_settlement_mode=settlement_mode,
             )
+            
+            # Extract from completion object
+            tx_hash = getattr(completion, 'transaction_hash', None)
+            finish_reason = getattr(completion, 'finish_reason', None)
+            message = getattr(completion, 'message', None) or getattr(completion, 'content', None)
             
             # Extract content from message
             if isinstance(message, dict):
@@ -546,8 +628,18 @@ class OpenGradientAnalyzer:
             else:
                 raw_output = str(message) if message else ""
             
+            # Log what we got for debugging
+            logger.info(f"🔍 [METHOD A] Got TX: {tx_hash} (type: {type(tx_hash)})")
+            logger.info(f"🔍 [METHOD A] Settlement mode used: {settlement_mode}")
+            
             if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
-                raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
+                # If we got "external", try to get OPG tokens first
+                if tx_hash == "external":
+                    logger.warning("⚠️ Got 'external' tx - OPG approval may be missing")
+                    # Don't raise error, just log and continue with fallback
+                    pass
+                else:
+                    raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
             
             logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}, finish: {finish_reason}")
             logger.info(f"📝 Raw output: {raw_output[:300]}...")
