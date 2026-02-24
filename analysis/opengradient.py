@@ -80,6 +80,34 @@ from utils.cache import cache, CacheKeys, CacheTTL
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_settlement_mode(mode_enum: Any):
+    """Pick the strongest available settlement mode across SDK versions."""
+    for attr in ("SETTLE", "SETTLE_INDIVIDUAL", "SETTLE_ONCHAIN", "SETTLE_METADATA"):
+        if hasattr(mode_enum, attr):
+            return getattr(mode_enum, attr)
+    return None
+
+
+def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
+    """Return first model enum name available in current SDK."""
+    tee_llm = getattr(og_module, "TEE_LLM", None)
+    if tee_llm is None:
+        return "GPT_4O"
+    for name in candidates:
+        if hasattr(tee_llm, name):
+            return name
+    return "GPT_4O"
+
+
+def _has_real_tx_hash(tx_hash: Any) -> bool:
+    if not isinstance(tx_hash, str):
+        return False
+    tx = tx_hash.strip()
+    if not tx or tx.lower() == "external":
+        return False
+    return tx.startswith("0x") and len(tx) >= 66
+
 class SafeOpenGradientLLM(BaseChatModel):
     """Custom wrapper for OpenGradient synchronous client. Bypasses Windows aiohttp DNS bugs."""
     client: Any
@@ -121,12 +149,13 @@ class SafeOpenGradientLLM(BaseChatModel):
 
         # 3. Call SDK synchronously
         try:
+            settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
             res = getattr(self.client, "llm").chat(
                 model=getattr(og.TEE_LLM, self.model_enum),
                 messages=formatted_msgs,
                 max_tokens=800,
                 temperature=0.3,
-                x402_settlement_mode=og.x402SettlementMode.SETTLE_METADATA
+                x402_settlement_mode=settlement_mode or og.x402SettlementMode.SETTLE_METADATA,
             )
         except Exception as e:
             logger_err = f"TEE SDK Error: {e}"
@@ -338,6 +367,7 @@ class OpenGradientAnalyzer:
         "GPT_4O",
         "CLAUDE_3_5_HAIKU",
     ]
+    REQUIRE_X402_TX = True
 
     def __init__(self):
         self._client = None
@@ -360,9 +390,11 @@ class OpenGradientAnalyzer:
                 private_key=private_key,
             )
             self._initialized = True
+
+            self._selected_model = _pick_best_model_enum(self._og, self.MODEL_FALLBACK)
             
             # Init LLM via custom safe adapter
-            self._llm = SafeOpenGradientLLM(client=self._client, model_enum="GPT_4O")
+            self._llm = SafeOpenGradientLLM(client=self._client, model_enum=self._selected_model)
             
             # Init tools
             self._solana_scraper = SolanaScraper()
@@ -389,6 +421,7 @@ class OpenGradientAnalyzer:
                 f"OpenGradient SDK initialized — key: "
                 f"{private_key[:6]}...{private_key[-4:]}"
             )
+            logger.info(f"OpenGradient model selected: {self._selected_model}")
         except Exception as e:
             logger.warning(f"OpenGradient SDK not available (will use fallback): {e}")
 
@@ -531,17 +564,20 @@ class OpenGradientAnalyzer:
                 {"role": "user", "content": input_text}
             ]
             
+            settlement_mode = _resolve_settlement_mode(self._og.x402SettlementMode)
             # Call direct LLM chat with TEE
             completion = self._client.llm.chat(
-                model=self._og.TEE_LLM.GPT_4O,
+                model=getattr(self._og.TEE_LLM, self._selected_model),
                 messages=messages,
                 max_tokens=2000,
                 temperature=0.1,  # Low temp for consistent structured output
-                x402_settlement_mode=self._og.x402SettlementMode.SETTLE_METADATA,
+                x402_settlement_mode=settlement_mode or self._og.x402SettlementMode.SETTLE_METADATA,
             )
             
             raw_output = completion.chat_output.get("content", "") if completion.chat_output else ""
             tx_hash = completion.transaction_hash
+            if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
+                raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
             
             logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}")
             logger.info(f"📝 Raw output: {raw_output[:300]}...")
@@ -560,9 +596,9 @@ class OpenGradientAnalyzer:
                         "ai_result": ai_result,
                         "tx_hash": tx_hash,
                         "transaction_hash": tx_hash,
-                        "model_cid": "GPT_4O",
+                        "model_cid": self._selected_model,
                         "raw_output": raw_output,
-                        "model_used": "Direct LLM.chat()",
+                        "model_used": f"Direct LLM.chat()/{self._selected_model}",
                         "used_opengradient": True,
                     }
                 else:
@@ -572,6 +608,20 @@ class OpenGradientAnalyzer:
                 
         except Exception as e:
             logger.warning(f"[METHOD A] Failed: {e}, trying fallback...")
+
+        if self.REQUIRE_X402_TX:
+            error_msg = "x402 tx hash required but OpenGradient direct call did not return a valid on-chain tx"
+            logger.error(error_msg)
+            return {
+                "ai_result": None,
+                "tx_hash": None,
+                "transaction_hash": None,
+                "model_cid": self._selected_model,
+                "raw_output": None,
+                "model_used": f"Direct LLM.chat()/{self._selected_model}",
+                "used_opengradient": False,
+                "error": error_msg,
+            }
 
         # ════════════════════════════════════════════════════════════════════════
         # METHOD B: LangChain ReAct Agent - Fallback approach

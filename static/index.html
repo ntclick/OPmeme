@@ -876,6 +876,7 @@
         
         const breakdown = data.breakdown || {};
         const tc = breakdown.technical?.components || {};
+        document.getElementById('techScoreTotal').innerText = breakdown.technical?.total ?? '--';
         
         document.getElementById('score_momentum').innerText = tc.momentum?.score ?? '--';
         document.getElementById('score_volume').innerText = tc.volume?.score ?? '--';
