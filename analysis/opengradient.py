@@ -345,17 +345,29 @@ class OpenGradientAnalyzer:
             logger.warning(f"❌ OpenGradient init failed: {self._init_error}")
             return
 
+        # Get email and password for NEW SDK API
+        from config import OPENGRADIENT_EMAIL, OPENGRADIENT_PASSWORD
+        
+        if not OPENGRADIENT_EMAIL or not OPENGRADIENT_PASSWORD:
+            self._init_error = "OPENGRADIENT_EMAIL or OPENGRADIENT_PASSWORD not set"
+            logger.warning(f"❌ OpenGradient init failed: {self._init_error}")
+            return
+
         try:
             self._og = og
             
-            # Use og.Client() with private key only - x402 payment handles auth
-            self._client = og.Client(private_key=private_key)
+            # NEW SDK API: og.init() with email + password
+            og.init(
+                private_key=private_key,
+                email=OPENGRADIENT_EMAIL,
+                password=OPENGRADIENT_PASSWORD
+            )
             self._initialized = True
 
             self._selected_model = _pick_best_model_enum(self._og, self.MODEL_FALLBACK)
             
             # Init LLM via custom safe adapter
-            self._llm = SafeOpenGradientLLM(client=self._client, model_enum=self._selected_model)
+            self._llm = SafeOpenGradientLLM(client=None, model_enum=self._selected_model)
             
             # Init tools
             self._solana_scraper = SolanaScraper()
@@ -363,7 +375,7 @@ class OpenGradientAnalyzer:
 
             logger.info(
                 f"✅ OpenGradient SDK initialized — key: "
-                f"{private_key[:6]}...{private_key[-4:]}"
+                f"{private_key[:6]}...{private_key[-4:]}, email: {OPENGRADIENT_EMAIL}"
             )
             logger.info(f"OpenGradient model selected: {self._selected_model}")
         except Exception as e:
@@ -499,10 +511,10 @@ class OpenGradientAnalyzer:
             token_type = "new"
 
         # ════════════════════════════════════════════════════════════════════════
-        # METHOD A: Direct client.llm.chat() - SDK API with x402 payment
+        # METHOD A: Direct og.llm_chat() - NEW SDK API
         # ════════════════════════════════════════════════════════════════════════
         try:
-            logger.info(f"🧠 [METHOD A] Running client.llm.chat()...")
+            logger.info(f"🧠 [METHOD A] Running og.llm_chat()...")
             
             # Build messages for direct chat
             messages = [
@@ -511,24 +523,26 @@ class OpenGradientAnalyzer:
             ]
             
             # Use TEE_LLM from SDK
-            model = getattr(og.TEE_LLM, self._selected_model, og.TEE_LLM.GPT_4O)
+            model_cid = getattr(og.TEE_LLM, self._selected_model, og.TEE_LLM.GPT_4O)
             
-            # Call SDK API - returns completion object with transaction_hash
-            completion = self._client.llm.chat(
-                model=model,
+            # NEW SDK API: og.llm_chat() returns tuple (tx_hash, finish_reason, message)
+            tx_hash, finish_reason, message = og.llm_chat(
+                model_cid=model_cid,
                 messages=messages,
                 max_tokens=2000,
                 temperature=0.1,
             )
             
-            # Extract content and tx hash
-            raw_output = completion.chat_output.get("content", "") if completion.chat_output else ""
-            tx_hash = completion.transaction_hash
+            # Extract content from message
+            if isinstance(message, dict):
+                raw_output = message.get("content", "")
+            else:
+                raw_output = str(message) if message else ""
             
             if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
                 raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
             
-            logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}")
+            logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}, finish: {finish_reason}")
             logger.info(f"📝 Raw output: {raw_output[:300]}...")
             
             if raw_output:

@@ -112,6 +112,9 @@ class BirdeyeClient:
         
         This is the GOLDMINE endpoint - one call gets most of what we need.
         """
+        # Rate limit protection - Birdeye free tier is ~10 req/s
+        await asyncio.sleep(0.2)
+        
         data = await self._request("/defi/token_overview", {"address": mint})
         
         if data:
