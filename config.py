@@ -1,6 +1,7 @@
 # config.py — Environment variables & constants
 
 import os
+import os.path
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -21,6 +22,19 @@ if not DATABASE_URL:
     import tempfile
     fallback_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
     DATABASE_URL = f"sqlite:///{fallback_path}"
+
+# Railway often runs the app under /app (read-only for non-root), so relative
+# sqlite paths like sqlite:///./coincheckgo.db resolve to /app/coincheckgo.db
+# and then fail when SQLite tries to create journal/WAL files.
+if DATABASE_URL.startswith("sqlite:") and ("RAILWAY_" in " ".join(os.environ.keys())):
+    if DATABASE_URL.startswith("sqlite:///./"):
+        import tempfile
+        fallback_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
+        DATABASE_URL = f"sqlite:///{fallback_path}"
+    elif DATABASE_URL.startswith("sqlite:////app/"):
+        import tempfile
+        fallback_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
+        DATABASE_URL = f"sqlite:///{fallback_path}"
 
 # Ensure SQLite directory exists and is writable
 if DATABASE_URL.startswith("sqlite:///") or DATABASE_URL.startswith("sqlite:////"):
