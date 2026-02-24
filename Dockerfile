@@ -20,8 +20,7 @@ RUN mkdir -p /app/data && chown user:user /app/data
 
 USER user
 ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH \
-    DATABASE_URL=sqlite:////app/data/coincheckgo.db
+    PATH=/home/user/.local/bin:$PATH
 
 # Expose single port for Railway
 EXPOSE 8080
