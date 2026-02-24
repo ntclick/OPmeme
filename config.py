@@ -17,7 +17,10 @@ else:
 # Database
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    DATABASE_URL = f"sqlite:///{_here / 'coincheckgo.db'}"
+    # Default to /tmp for Railway compatibility (ephemeral filesystem)
+    import tempfile
+    fallback_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
+    DATABASE_URL = f"sqlite:///{fallback_path}"
 
 # Ensure SQLite directory exists and is writable
 if DATABASE_URL.startswith("sqlite:///"):
@@ -42,6 +45,7 @@ if DATABASE_URL.startswith("sqlite:///"):
             import tempfile
             fallback_path = Path(tempfile.gettempdir()) / "coincheckgo.db"
             DATABASE_URL = f"sqlite:///{fallback_path}"
+            print(f"⚠️ Using fallback database: {DATABASE_URL}")
 
 # Apify (Twitter scraping)
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
