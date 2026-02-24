@@ -36,22 +36,19 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_settlement_mode(mode_enum: Any):
-    """Pick the best available settlement mode - prefer SETTLE_METADATA for reliability.
+    """Pick SETTLE_ONCHAIN for real tx hash (requires OPG tokens).
     
-    SETTLE_ONCHAIN requires OPG tokens and may return 'external' if:
-    - Insufficient OPG balance
-    - Network issues
-    - SDK version mismatch
-    
-    SETTLE_METADATA always works but returns 'external' tx hash.
+    SETTLE_ONCHAIN - Returns real on-chain tx hash (requires OPG balance)
+    SETTLE_METADATA - Always works but returns 'external' tx hash
     """
-    # Try SETTLE_METADATA first - most reliable, no token required
+    # Prefer SETTLE_ONCHAIN for real tx hash
+    if hasattr(mode_enum, "SETTLE_ONCHAIN"):
+        return getattr(mode_enum, "SETTLE_ONCHAIN")
+    if hasattr(mode_enum, "SETTLE"):
+        return getattr(mode_enum, "SETTLE")
+    # Fallback to METADATA (no tx hash)
     if hasattr(mode_enum, "SETTLE_METADATA"):
         return getattr(mode_enum, "SETTLE_METADATA")
-    # Fallback to other modes
-    for attr in ("SETTLE", "SETTLE_INDIVIDUAL", "SETTLE_ONCHAIN"):
-        if hasattr(mode_enum, attr):
-            return getattr(mode_enum, attr)
     return None
 
 
