@@ -265,7 +265,7 @@ class SolanaScraper:
             top20_pct = sum(h["percentage"] for h in holders[:20])
 
             return {
-                "total_holders": await self.get_holder_count(actual_mint),
+                "total_holders": None,
                 "top10_pct": round(top10_pct, 2),
                 "top20_pct": round(top20_pct, 2),
                 "largest_holder_pct": holders[0]["percentage"] if holders else 0,

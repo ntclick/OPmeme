@@ -15,6 +15,9 @@ RUN useradd -m -u 1000 user
 # Copy the rest of the application with ownership
 COPY --chown=user:user . .
 
+# Install patched local OpenGradient SDK (overrides PyPI)
+RUN pip install --no-cache-dir -e ./OpenGradient-SDK
+
 # Create directory for sqlite database with write permissions
 RUN mkdir -p /app/data && chown user:user /app/data
 

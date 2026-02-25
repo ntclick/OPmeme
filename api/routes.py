@@ -246,6 +246,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     if raw:
                         birdeye_data = birdeye_client.extract_scores_from_overview(raw)
                         birdeye_data["raw"] = raw
+                        if isinstance(holder_data, dict) and birdeye_data.get("holder_count") and not holder_data.get("total_holders"):
+                            holder_data["total_holders"] = birdeye_data.get("holder_count")
                         mc = birdeye_data.get('market_cap') or 0
                         holders = birdeye_data.get('holder_count') or 0
                         vol = birdeye_data.get('volume_24h') or 0

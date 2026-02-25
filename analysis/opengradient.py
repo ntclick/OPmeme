@@ -360,40 +360,14 @@ class OpenGradientAnalyzer:
             logger.warning(f"❌ OpenGradient init failed: {self._init_error}")
             return
 
-        # Get email and password for NEW SDK API
-        from config import OPENGRADIENT_EMAIL, OPENGRADIENT_PASSWORD
-        
-        if not OPENGRADIENT_EMAIL or not OPENGRADIENT_PASSWORD:
-            self._init_error = "OPENGRADIENT_EMAIL or OPENGRADIENT_PASSWORD not set"
-            logger.warning(f"❌ OpenGradient init failed: {self._init_error}")
-            return
-
         try:
             self._og = og
-            
-            # NEW SDK API: og.init() with email + password
-            # Skip Firebase for now - just use private key
-            try:
-                og.init(
-                    private_key=private_key,
-                    email=OPENGRADIENT_EMAIL,
-                    password=OPENGRADIENT_PASSWORD
-                )
-            except ValueError as e:
-                if "Firebase API Key" in str(e):
-                    # Try without email/password if Firebase fails
-                    logger.warning("⚠️ Firebase auth failed, trying private key only")
-                    og.init(private_key=private_key)
-                else:
-                    raise
-            self._initialized = True
 
-            # Get the global client
-            self._client = og.global_client
+            self._client = og.Client(private_key=private_key)
+            self._initialized = True
             
             # Ensure OPG approval before inference
             try:
-                from opengradient.client.opg_token import ensure_opg_approval
                 logger.info("🔍 Checking OPG approval...")
                 
                 # Use client.llm.ensure_opg_approval directly (preferred method)
@@ -406,22 +380,6 @@ class OpenGradientAnalyzer:
                         logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
                 except Exception as e:
                     logger.warning(f"⚠️ Permit2 approval failed: {e}")
-                    # Fallback: try to get wallet and use standalone function
-                    logger.info("🔄 Trying fallback with wallet object...")
-                    
-                    # Get wallet from client.llm._wallet_account
-                    if hasattr(self._client.llm, '_wallet_account'):
-                        wallet = self._client.llm._wallet_account
-                        try:
-                            approval = ensure_opg_approval(wallet, opg_amount=5.0)
-                            if approval.tx_hash:
-                                logger.info(f"✅ [PERMIT2] Fallback approval TX: {approval.tx_hash}")
-                            else:
-                                logger.info(f"✅ [PERMIT2] Fallback already approved: {approval.allowance_before}")
-                        except Exception as e2:
-                            logger.warning(f"⚠️ Fallback approval failed: {e2}")
-                    else:
-                        logger.warning("⚠️ Could not find wallet in client.llm")
                     
             except Exception as e:
                 logger.warning(f"⚠️ Permit2 approval failed: {e}")
@@ -437,7 +395,7 @@ class OpenGradientAnalyzer:
 
             logger.info(
                 f"✅ OpenGradient SDK initialized — key: "
-                f"{private_key[:6]}...{private_key[-4:]}, email: {OPENGRADIENT_EMAIL}"
+                f"{private_key[:6]}...{private_key[-4:]}"
             )
             logger.info(f"OpenGradient model selected: {self._selected_model}")
         except Exception as e:

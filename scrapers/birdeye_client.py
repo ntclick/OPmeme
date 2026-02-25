@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 import logging
 import asyncio
 import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ class BirdeyeClient:
             "x-chain": "solana",  # ⚠️ CRITICAL - without this = 400 error!
             "accept": "application/json"
         }
+
+        self._token_overview_cache: Dict[str, Any] = {}
+        self._token_overview_cache_expiry: Dict[str, float] = {}
         
         if not api_key:
             logger.warning("⚠️ BIRDEYE_API_KEY not set - API calls will fail!")
@@ -72,8 +76,18 @@ class BirdeyeClient:
                     return None
                 
                 if resp.status_code == 429:
-                    logger.warning("⚠️ Birdeye 429 Rate Limited - backing off")
-                    await asyncio.sleep(2)
+                    reset = resp.headers.get("x-ratelimit-reset")
+                    sleep_seconds = 2.0
+                    try:
+                        if reset:
+                            reset_ts = int(reset)
+                            now_ts = int(time.time())
+                            if reset_ts > now_ts:
+                                sleep_seconds = min(max(reset_ts - now_ts, 1), 30)
+                    except Exception:
+                        pass
+                    logger.warning(f"⚠️ Birdeye 429 Rate Limited - backing off {sleep_seconds}s")
+                    await asyncio.sleep(sleep_seconds)
                     return None
                 
                 if resp.status_code == 404:
@@ -112,7 +126,11 @@ class BirdeyeClient:
         
         This is the GOLDMINE endpoint - one call gets most of what we need.
         """
-        # Rate limit protection - Birdeye free tier is ~10 req/s
+        cached = self._token_overview_cache.get(mint)
+        expiry = self._token_overview_cache_expiry.get(mint)
+        if cached and expiry and time.time() < expiry:
+            return cached
+
         await asyncio.sleep(0.2)
         
         data = await self._request("/defi/token_overview", {"address": mint})
@@ -123,6 +141,9 @@ class BirdeyeClient:
                 f"vol24h=${data.get('v24hUSD', 0):,.0f}, "
                 f"mc=${data.get('mc', 0):,.0f}"
             )
+
+            self._token_overview_cache[mint] = data
+            self._token_overview_cache_expiry[mint] = time.time() + 5
         
         return data
     

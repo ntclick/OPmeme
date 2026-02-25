@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opengradient"
+version = "0.7.4"
+description = "Python SDK for OpenGradient decentralized model management & inference services"
+authors = [{name = "OpenGradient", email = "adam@vannalabs.ai"}]
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "eth-account>=0.13.4",
+    "web3>=7.3.0",
+    "click>=8.1.7",
+    "firebase-rest-api>=1.11.0",
+    "numpy>=1.26.4",
+    "requests>=2.32.3",
+    "langchain>=0.3.7",
+    "openai>=1.58.1",
+    "pydantic>=2.9.2",
+    "og-test-v2-x402==0.0.9"
+]
+
+[project.scripts]
+opengradient = "opengradient.cli:cli"
+
+[project.urls]
+Homepage = "https://opengradient.ai"
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.ipynb", "*.pyc", "*.pyo", ".gitignore", "requirements.txt", "conftest.py"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["opengradient*"]
+exclude = ["tests*", "stresstest*"]
+
+[tool.setuptools.package-data]
+"opengradient" = [
+    "abi/*.abi",
+    "bin/*.bin",
+    "**/*.py"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+select = ["E", "F", "I", "N"]
+ignore = []
+
+[tool.ruff.mccabe]
+max-complexity = 10

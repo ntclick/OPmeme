@@ -179,8 +179,14 @@ async def calculate_overall_score(
     )
     
     # --- ON-CHAIN ---
-    holder_score = calculate_holder_score(birdeye_data.get("holder", 0))
-    security_score = calculate_security_score(security_data, token_age_hours)
+    holder_result = calculate_holder_score(
+        {"total_holders": birdeye_data.get("holder", 0)},
+        security_data,
+    )
+    holder_score = holder_result["holder_score"]
+
+    security_result = calculate_security_score(security_data, token_age_hours)
+    security_score = security_result["security_score"]
     whale_score = calculate_whale_risk_score(security_data.get("top10HolderPercent", 50))
     
     onchain_total = (
