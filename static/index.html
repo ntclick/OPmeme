@@ -322,6 +322,26 @@
                             Analysis pending...
                         </p>
                         
+                        <!-- Market Data Row -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6" id="marketDataRow">
+                            <div class="bg-white/5 border border-white/10 rounded-lg p-3">
+                                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">MCap</div>
+                                <div class="font-mono text-sm text-white" id="marketCapDisplay">--</div>
+                            </div>
+                            <div class="bg-white/5 border border-white/10 rounded-lg p-3">
+                                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Liquidity</div>
+                                <div class="font-mono text-sm text-white" id="liquidityDisplay">--</div>
+                            </div>
+                            <div class="bg-white/5 border border-white/10 rounded-lg p-3">
+                                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Holders</div>
+                                <div class="font-mono text-sm text-white" id="holdersDisplay">--</div>
+                            </div>
+                            <div class="bg-white/5 border border-white/10 rounded-lg p-3">
+                                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Vol 24h</div>
+                                <div class="font-mono text-sm text-white" id="volumeDisplay">--</div>
+                            </div>
+                        </div>
+                        
                         <!-- OpenGradient Verification Badge -->
                         <a id="ogVerifyBtn" href="#" target="_blank" class="inline-flex items-center gap-2 bg-gradient-to-r from-gray-900 to-black border border-white/10 hover:border-secondary/50 px-4 py-2 rounded-lg transition-all group shadow-lg">
                             <i data-lucide="cpu" class="w-5 h-5 text-secondary group-hover:text-white transition-colors"></i>
@@ -881,8 +901,11 @@
 
         const t = translations[currentLang];
 
-        // Always use contract_address for analysis
-        let requestBody = { ticker: "ANALYZE", contract_address: input, force_refresh: true };
+        // Let backend resolve ticker/contract. Avoid hardcoding a fake ticker (breaks caching + analysis context).
+        let requestBody = { ticker: input, force_refresh: true };
+        if (input.length > 30 && !input.includes(' ')) {
+            requestBody.contract_address = input;
+        }
 
         const btn = document.getElementById('analyzeBtn');
         const loading = document.getElementById('loading');
@@ -957,9 +980,44 @@
         const score = Math.round(data.trust_score || data.overall_score);
         const riskConfig = getRiskConfig(score);
 
-        document.getElementById('tickerDisplay').innerText = "$" + data.ticker.toUpperCase();
-        document.getElementById('verdictDisplay').innerText = data.verdict;
-        
+        document.getElementById('tickerDisplay').innerText = "$" + (data.ticker || '').toUpperCase();
+
+        const market = data.market_data || {};
+        const fmtUSD = (v) => {
+            const n = Number(v);
+            if (!isFinite(n) || n <= 0) return '--';
+            if (n >= 1e9) return `$${(n/1e9).toFixed(2)}B`;
+            if (n >= 1e6) return `$${(n/1e6).toFixed(2)}M`;
+            if (n >= 1e3) return `$${(n/1e3).toFixed(0)}K`;
+            return `$${n.toFixed(0)}`;
+        };
+        const fmtInt = (v) => {
+            const n = Number(v);
+            if (!isFinite(n) || n <= 0) return '--';
+            return n.toLocaleString();
+        };
+
+        const marketCapEl = document.getElementById('marketCapDisplay');
+        const liquidityEl = document.getElementById('liquidityDisplay');
+        const holdersEl = document.getElementById('holdersDisplay');
+        const volumeEl = document.getElementById('volumeDisplay');
+        if (marketCapEl) marketCapEl.innerText = fmtUSD(market.market_cap);
+        if (liquidityEl) liquidityEl.innerText = fmtUSD(market.liquidity_usd);
+        if (holdersEl) holdersEl.innerText = fmtInt(market.holders);
+        if (volumeEl) volumeEl.innerText = fmtUSD(market.volume_24h);
+
+        const verdictEl = document.getElementById('verdictDisplay');
+        if (verdictEl) {
+            if (data.tx_hash) {
+                verdictEl.innerText = `Payment settled: ${data.tx_hash.substring(0, 12)}... (rendering verdict)`;
+                setTimeout(() => {
+                    verdictEl.innerText = data.verdict || '';
+                }, 400);
+            } else {
+                verdictEl.innerText = data.verdict || '';
+            }
+        }
+
         if (data.contract_address) {
             const addr = data.contract_address;
             const shortAddr = addr.substring(0,6) + '...' + addr.substring(addr.length-4);

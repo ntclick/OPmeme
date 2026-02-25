@@ -321,6 +321,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # ══════════════════════════════════════════════════════════════════════
         
         liq_usd = birdeye_data.get("liquidity") or _safe_get(dex_data, "liquidity", "usd") or 0
+
+        if isinstance(token_info, dict) and token_age_hours is not None:
+            token_info["age_hours"] = token_age_hours
         
         overall = _calc_overall_v31(
             momentum=momentum_result.get("momentum_score", 50),
@@ -382,18 +385,48 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # ══════════════════════════════════════════════════════════════════════
         
         # Prepare context for AI
+        market_cap = (
+            birdeye_data.get("market_cap")
+            or dex_data.get("marketCap")
+            or dex_data.get("fdv")
+            or token_info.get("marketCap")
+            or 0
+        )
+        volume_24h = birdeye_data.get("volume_24h") or _safe_get(dex_data, "volume", "h24") or 0
+        buy_sell_ratio = trade_result.get("buy_sell_ratio")
+
+        market_data = {
+            "price": birdeye_data.get("price") or dex_data.get("priceUsd"),
+            "market_cap": market_cap,
+            "liquidity_usd": liq_usd,
+            "volume_24h": volume_24h,
+            "holders": holder_count,
+            "price_change_1h": price_changes.get("1h"),
+            "price_change_6h": price_changes.get("6h"),
+            "price_change_24h": price_changes.get("24h"),
+            "buy_volume_pct": volume_result.get("buy_volume_pct"),
+            "buy_sell_ratio": buy_sell_ratio,
+            "token_age_hours": round(token_age_hours, 2),
+        }
+
         on_chain_context = {
             "holders": holder_data,
             "token_info": token_info,
             "liquidity_usd": liq_usd,
+            "market_data": market_data,
             "smart_money": {} # Disable for now to save tokens
         }
         
         scores_context = {
             "overall_score": overall["score"],
-            "social_score": 50,
-            "bot_score": 50,
-            "holder_score": holder_score
+            "social_score": 0,
+            "bot_score": 0,
+            "holder_score": holder_score,
+            "security_score": security_result.get("security_score"),
+            "liquidity_score": liquidity_result.get("liquidity_score"),
+            "momentum_score": momentum_result.get("momentum_score"),
+            "volume_score": volume_result.get("volume_score"),
+            "trade_pressure_score": trade_result.get("trade_pressure_score"),
         }
         
         # We don't have tweets since Social is disabled
@@ -500,10 +533,14 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             ai_trust_score=None,
         )
         
+        tech_total_100 = round((overall["tech_total"] / 0.65) if overall.get("tech_total") is not None else 0, 1)
+        onchain_total_100 = round((overall["onchain_total"] / 0.35) if overall.get("onchain_total") is not None else 0, 1)
+
         breakdown = {
             "technical": {
-                "total": round(overall["tech_total"], 1),
+                "total": tech_total_100,
                 "weight": "65%",
+                "contribution": round(overall["tech_total"], 1),
                 "components": {
                     "momentum": {"score": momentum_result.get("momentum_score", 50), "weight": "25%", 
                                 "trend": momentum_result.get("trend"), "details": momentum_result.get("details", [])},
@@ -516,8 +553,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 }
             },
             "onchain": {
-                "total": round(overall["onchain_total"], 1),
+                "total": onchain_total_100,
                 "weight": "35%",
+                "contribution": round(overall["onchain_total"], 1),
                 "components": {
                     "holder": {"score": holder_score, "weight": "15%", "holder_count": holder_count},
                     "security": {"score": security_result.get("security_score", 50), "weight": "12%",
@@ -552,6 +590,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "risk_level": overall["risk"],
             "scores": scores,
             "breakdown": breakdown,
+            "market_data": market_data,
             "technical_indicators": {
                 "trend": momentum_result.get("trend"),
                 "divergence": momentum_result.get("divergence"),

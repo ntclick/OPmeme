@@ -110,6 +110,8 @@ class AnalyzeResponse(BaseModel):
     # Score breakdowns
     scores: ScoreBreakdown
     breakdown: Optional[dict[str, Any]] = None  # Extended breakdown
+
+    market_data: Optional[dict[str, Any]] = None
     
     # Signals
     signals: Optional[SignalsSummary] = None

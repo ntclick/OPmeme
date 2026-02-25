@@ -705,8 +705,11 @@ class OpenGradientAnalyzer:
         # Calculate token classification for AI context
         holder_data = on_chain.get("holders", {}) if on_chain else {}
         token_info = on_chain.get("token_info", {}) if on_chain else {}
+        market_data = on_chain.get("market_data", {}) if on_chain else {}
         
         holder_count = int(_as_float(holder_data.get("total_holders", 0), 0.0))
+        if holder_count <= 0:
+            holder_count = int(_as_float(market_data.get("holders", 0), 0.0))
         token_age_hours = _as_float(token_info.get("age_hours", 0), 0.0)
         liquidity_usd = _as_float(on_chain.get("liquidity_usd", 0), 0.0) if on_chain else 0.0
         
@@ -803,6 +806,18 @@ class OpenGradientAnalyzer:
                     parts.append(f"Total Holders: {total}")
                 else:
                     parts.append("Total Holders: DATA UNAVAILABLE")
+
+            if on_chain.get("market_data"):
+                md = on_chain.get("market_data") or {}
+                parts.append("")
+                parts.append("--- MARKET DATA (BIRDEYE/DEX) ---")
+                parts.append(f"Market Cap: {md.get('market_cap')}")
+                parts.append(f"Liquidity (USD): {md.get('liquidity_usd')}")
+                parts.append(f"Volume 24h (USD): {md.get('volume_24h')}")
+                parts.append(f"Price Change 1h (%): {md.get('price_change_1h')}")
+                parts.append(f"Price Change 24h (%): {md.get('price_change_24h')}")
+                parts.append(f"Buy/Sell Ratio: {md.get('buy_sell_ratio')}")
+                parts.append(f"Buy Volume %: {md.get('buy_volume_pct')}")
 
             # SMART MONEY DATA - NEW CRITICAL FACTOR
             if on_chain.get("smart_money"):
