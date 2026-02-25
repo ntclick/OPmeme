@@ -1,6 +1,7 @@
 """LLM chat and completion via TEE-verified execution with x402 payments."""
 
 import asyncio
+import base64
 import json
 import re
 import threading
@@ -29,6 +30,33 @@ def _first_hex_hash(*values: Optional[str]) -> Optional[str]:
         if isinstance(v, str) and re.fullmatch(r"0x[a-fA-F0-9]{64}", v):
             return v
     return None
+
+
+def _x_settle_header_value(mode: x402SettlementMode) -> str:
+    if mode == x402SettlementMode.SETTLE_METADATA:
+        return "SETTLE_INDIVIDUAL_WITH_METADATA"
+    if mode == x402SettlementMode.SETTLE_BATCH:
+        return "SETTLE_BATCH"
+    return "SETTLE_INDIVIDUAL"
+
+
+def _extract_payment_receipt_tx_hash(headers: httpx.Headers) -> Optional[str]:
+    receipt_b64 = headers.get("X-PAYMENT-RESPONSE") or headers.get("x-payment-response")
+    if not receipt_b64:
+        return None
+
+    try:
+        receipt_b64_s = receipt_b64.strip()
+        receipt_b64_s += "=" * (-len(receipt_b64_s) % 4)
+        try:
+            receipt_raw = base64.b64decode(receipt_b64_s)
+        except Exception:
+            receipt_raw = base64.urlsafe_b64decode(receipt_b64_s)
+        receipt = json.loads(receipt_raw.decode("utf-8"))
+    except Exception:
+        return None
+
+    return _first_hex_hash(receipt.get("txHash"), receipt.get("tx_hash"), receipt.get("transaction_hash"))
 
 TIMEOUT = httpx.Timeout(
     timeout=90.0,
@@ -208,6 +236,7 @@ class LLM:
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {X402_PLACEHOLDER_API_KEY}",
                 "X-SETTLEMENT-TYPE": x402_settlement_mode.value,
+                "X-SETTLE": _x_settle_header_value(x402_settlement_mode),
             }
 
             payload = {
@@ -230,12 +259,14 @@ class LLM:
                     or response.headers.get("x-payment-hash")
                     or response.headers.get("x402-payment-hash")
                 )
+                payment_receipt_tx_hash = _extract_payment_receipt_tx_hash(response.headers)
                 tx_hash = _first_hex_hash(
                     response.headers.get("x-transaction-hash"),
                     response.headers.get("x-tx-hash"),
                     response.headers.get("x402-tx-hash"),
                 )
                 tx_hash = tx_hash or _first_hex_hash(payment_hash)
+                tx_hash = tx_hash or payment_receipt_tx_hash
 
                 content = await response.aread()
                 result = json.loads(content.decode())
@@ -247,6 +278,8 @@ class LLM:
                 )
                 payment_hash = payment_hash or result.get("payment_hash") or result.get("processing_hash")
                 tx_hash = tx_hash or _first_hex_hash(payment_hash)
+                payment_hash = payment_hash or payment_receipt_tx_hash
+                tx_hash = tx_hash or payment_receipt_tx_hash
 
                 return TextGenerationOutput(
                     transaction_hash=tx_hash or "external",
@@ -347,6 +380,7 @@ class LLM:
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {X402_PLACEHOLDER_API_KEY}",
                 "X-SETTLEMENT-TYPE": x402_settlement_mode.value,
+                "X-SETTLE": _x_settle_header_value(x402_settlement_mode),
             }
 
             payload = {
@@ -376,12 +410,14 @@ class LLM:
                     or response.headers.get("x-payment-hash")
                     or response.headers.get("x402-payment-hash")
                 )
+                payment_receipt_tx_hash = _extract_payment_receipt_tx_hash(response.headers)
                 tx_hash = _first_hex_hash(
                     response.headers.get("x-transaction-hash"),
                     response.headers.get("x-tx-hash"),
                     response.headers.get("x402-tx-hash"),
                 )
                 tx_hash = tx_hash or _first_hex_hash(payment_hash)
+                tx_hash = tx_hash or payment_receipt_tx_hash
                 content = await response.aread()
                 result = json.loads(content.decode())
 
@@ -396,6 +432,8 @@ class LLM:
                 )
                 payment_hash = payment_hash or result.get("payment_hash") or result.get("processing_hash")
                 tx_hash = tx_hash or _first_hex_hash(payment_hash)
+                payment_hash = payment_hash or payment_receipt_tx_hash
+                tx_hash = tx_hash or payment_receipt_tx_hash
 
                 return TextGenerationOutput(
                     transaction_hash=tx_hash or "external",
@@ -490,6 +528,7 @@ class LLM:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {X402_PLACEHOLDER_API_KEY}",
             "X-SETTLEMENT-TYPE": x402_settlement_mode.value,
+            "X-SETTLE": _x_settle_header_value(x402_settlement_mode),
         }
 
         payload = {
