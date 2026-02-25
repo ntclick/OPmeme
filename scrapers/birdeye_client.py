@@ -138,8 +138,8 @@ class BirdeyeClient:
         if data:
             logger.info(
                 f"✅ Birdeye overview: holder={data.get('holder')}, "
-                f"vol24h=${data.get('v24hUSD', 0):,.0f}, "
-                f"mc=${data.get('mc', 0):,.0f}"
+                f"vol24h=${(data.get('v24hUSD') or data.get('v1440mUSD') or 0):,.0f}, "
+                f"mc=${(data.get('mc') or data.get('marketCap') or 0):,.0f}"
             )
 
             self._token_overview_cache[mint] = data
@@ -285,46 +285,99 @@ class BirdeyeClient:
         """
         if not overview:
             return {}
-        
-        # Safe extraction with defaults - handle both field name variants
-        volume_24h = overview.get("v24hUSD") or overview.get("v24h") or 0
-        buy_volume = overview.get("vBuy24hUSD") or overview.get("vBuy24h") or 0
-        sell_volume = overview.get("vSell24hUSD") or overview.get("vSell24h") or 0
-        buys = overview.get("buy24h") or 0
-        sells = overview.get("sell24h") or 1  # Avoid division by zero
-        
-        # Market cap - check both field names
-        market_cap = overview.get("marketCap") or overview.get("mc") or 0
-        
-        # Liquidity - check both field names
-        liquidity = overview.get("liquidity") or overview.get("liquidityUsd") or 0
-        
+
+        def _first(*keys: str, default=None):
+            for k in keys:
+                v = overview.get(k)
+                if v is not None:
+                    return v
+            return default
+
+        def _num(v, default: float = 0.0) -> float:
+            if v is None:
+                return default
+            try:
+                return float(v)
+            except Exception:
+                return default
+
+        def _int(v, default: int = 0) -> int:
+            if v is None:
+                return default
+            try:
+                return int(v)
+            except Exception:
+                return default
+
+        # Safe extraction with defaults - support both legacy 24h fields and newer 1440m fields
+        volume_24h = _num(_first("v24hUSD", "v24h", "v1440mUSD", "v1440m", default=0))
+        buy_volume = _num(_first("vBuy24hUSD", "vBuy24h", "vBuy1440mUSD", "vBuy1440m", default=0))
+        sell_volume = _num(_first("vSell24hUSD", "vSell24h", "vSell1440mUSD", "vSell1440m", default=0))
+
+        buys = _int(_first("buy24h", "buy1440m", default=0))
+        sells = _int(_first("sell24h", "sell1440m", default=0))
+        sells_for_ratio = sells if sells > 0 else 1
+
+        trades_24h = _int(_first("trade24h", "trade1440m", default=0))
+        unique_traders_24h = _int(_first("uniqueWallet24h", "uniqueWallet1440m", default=0))
+
+        # Market cap - check multiple field names
+        market_cap = _num(_first("marketCap", "mc", "fdv", default=0))
+
+        # Liquidity - check multiple field names
+        liquidity = _num(_first("liquidity", "liquidityUsd", "liquidityUSD", default=0))
+
+        price_change_1h = _num(_first("priceChange1hPercent", "priceChange60mPercent", default=0))
+        price_change_24h = _num(_first("priceChange24hPercent", "priceChange1440mPercent", default=0))
+
+        volume_24h_change = _num(
+            _first(
+                "v24hChangePercent",
+                "v24hUSDChangePercent",
+                "v1440mChangePercent",
+                "v1440mUSDChangePercent",
+                default=0,
+            )
+        )
+        liquidity_change_24h = _num(
+            _first(
+                "liquidityChange24hPercent",
+                "liquidityChange1440mPercent",
+                "liquidityChangePercent",
+                default=0,
+            )
+        )
+
         return {
             # Market Data
-            "price": overview.get("price"),
+            "price": _num(overview.get("price"), 0.0) or None,
             "liquidity": liquidity,
             "market_cap": market_cap,
             
             # Holders (UNIQUE to Birdeye!)
-            "holder_count": overview.get("holder"),
-            "unique_traders_24h": overview.get("uniqueWallet24h"),
+            "holder_count": _int(_first("holder", "holders", default=0)) or None,
+            "unique_traders_24h": unique_traders_24h,
             
             # Volume
             "volume_24h": volume_24h,
             "buy_volume_24h": buy_volume,
             "sell_volume_24h": sell_volume,
+            "volume_24h_change": volume_24h_change,
             
             # Trades
-            "trades_24h": overview.get("trade24h"),
+            "trades_24h": trades_24h,
             "buys_24h": buys,
             "sells_24h": sells,
             
             # Price Changes
-            "price_change_1h": overview.get("priceChange1hPercent"),
-            "price_change_24h": overview.get("priceChange24hPercent"),
+            "price_change_1h": price_change_1h,
+            "price_change_24h": price_change_24h,
+
+            # Liquidity changes
+            "liquidity_change_24h": liquidity_change_24h,
             
             # Calculated Ratios
-            "buy_sell_ratio": buys / sells if sells > 0 else 1.0,
+            "buy_sell_ratio": buys / sells_for_ratio,
             "buy_volume_ratio": buy_volume / volume_24h if volume_24h > 0 else 0.5,
         }
 

@@ -16,7 +16,7 @@ from x402v2.mechanisms.evm import EthAccountSigner as EthAccountSignerv2
 from x402v2.mechanisms.evm.exact.register import register_exact_evm_client as register_exact_evm_clientv2
 from x402v2.mechanisms.evm.upto.register import register_upto_evm_client as register_upto_evm_clientv2
 
-from ..types import TEE_LLM, StreamChunk, TextGenerationOutput, TextGenerationStream, x402SettlementMode
+from ..types import TEE_LLM, StreamChunk, StreamChoice, StreamDelta, TextGenerationOutput, TextGenerationStream, x402SettlementMode
 from .exceptions import OpenGradientError
 from .opg_token import Permit2ApprovalResult, ensure_opg_approval
 
@@ -591,5 +591,30 @@ class LLM:
             headers=headers,
             timeout=60,
         ) as response:
+            payment_hash = (
+                response.headers.get(X402_PROCESSING_HASH_HEADER)
+                or response.headers.get("x-payment-hash")
+                or response.headers.get("x402-payment-hash")
+            )
+            payment_receipt_tx_hash = _extract_payment_receipt_tx_hash(response.headers)
+            tx_hash = _first_hex_hash(
+                response.headers.get("x-transaction-hash"),
+                response.headers.get("x-tx-hash"),
+                response.headers.get("x402-tx-hash"),
+            )
+            tx_hash = tx_hash or _first_hex_hash(payment_hash) or payment_receipt_tx_hash
+
+            if tx_hash or payment_hash or payment_receipt_tx_hash:
+                meta = {"tx_hash": tx_hash, "payment_hash": payment_hash or payment_receipt_tx_hash}
+                yield StreamChunk(
+                    choices=[
+                        StreamChoice(
+                            delta=StreamDelta(content="__OG_META__" + json.dumps(meta)),
+                            index=0,
+                        )
+                    ],
+                    model=model,
+                    is_final=False,
+                )
             async for parsed_chunk in _parse_sse_response(response):
                 yield parsed_chunk

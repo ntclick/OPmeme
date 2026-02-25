@@ -2,9 +2,14 @@
 # Weights: Technical 65% / On-Chain 35% / Social 0%
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from datetime import datetime, timedelta
+from contextvars import ContextVar
+from typing import Optional, Callable, Awaitable
+import asyncio
 import time
 import json
 import logging
@@ -47,6 +52,10 @@ def _detect_chain(address: str) -> str:
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_ANALYZE_STREAM_META_CB: ContextVar[Optional[Callable[[dict], Awaitable[None]]]] = ContextVar(
+    "_ANALYZE_STREAM_META_CB", default=None
+)
 
 # Services
 solana_scraper = SolanaScraper()
@@ -395,6 +404,30 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         volume_24h = birdeye_data.get("volume_24h") or _safe_get(dex_data, "volume", "h24") or 0
         buy_sell_ratio = trade_result.get("buy_sell_ratio")
 
+        dex_chain_id = dex_data.get("chainId")
+        dex_pair_address = dex_data.get("pairAddress")
+        dex_url = dex_data.get("url")
+        if not dex_url and dex_chain_id and dex_pair_address:
+            dex_url = f"https://dexscreener.com/{dex_chain_id}/{dex_pair_address}"
+
+        chart_url = None
+        if dex_url:
+            sep = "&" if "?" in dex_url else "?"
+            chart_url = f"{dex_url}{sep}embed=1&theme=dark"
+
+        dex_base = dex_data.get("baseToken") if isinstance(dex_data, dict) else None
+        token_name = dex_base.get("name") if isinstance(dex_base, dict) else None
+        token_symbol = dex_base.get("symbol") if isinstance(dex_base, dict) else None
+        token_logo = None
+        if isinstance(birdeye_data.get("raw"), dict):
+            token_logo = (
+                birdeye_data["raw"].get("logoURI")
+                or birdeye_data["raw"].get("logo")
+                or birdeye_data["raw"].get("logo_url")
+            )
+        token_info_block = dex_data.get("info") if isinstance(dex_data, dict) else None
+        token_links = token_info_block if isinstance(token_info_block, dict) else {}
+
         market_data = {
             "price": birdeye_data.get("price") or dex_data.get("priceUsd"),
             "market_cap": market_cap,
@@ -407,6 +440,19 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "buy_volume_pct": volume_result.get("buy_volume_pct"),
             "buy_sell_ratio": buy_sell_ratio,
             "token_age_hours": round(token_age_hours, 2),
+            "token": {
+                "name": token_name,
+                "symbol": token_symbol,
+                "logo": token_logo,
+                "links": token_links,
+            },
+            "dexscreener": {
+                "url": dex_url,
+                "pair_address": dex_pair_address,
+                "chain_id": dex_chain_id,
+                "dex_id": dex_data.get("dexId"),
+            },
+            "chart_url": chart_url,
         }
 
         on_chain_context = {
@@ -433,12 +479,27 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         empty_tweets = []
         
         logger.info(f"🧠 Running OpenGradient AI Inference...")
-        ai_result = await opengradient_analyzer.analyze_coin(
-            ticker=ticker,
-            tweets_summary=empty_tweets,
-            on_chain_data=on_chain_context,
-            scoring_result=scores_context
-        )
+        stream_meta_cb = _ANALYZE_STREAM_META_CB.get()
+        if stream_meta_cb:
+            ai_result = None
+            async for evt in opengradient_analyzer.analyze_coin_stream(
+                ticker=ticker,
+                tweets_summary=empty_tweets,
+                on_chain_data=on_chain_context,
+                scoring_result=scores_context,
+            ):
+                if evt.get("type") == "meta":
+                    await stream_meta_cb(evt)
+                elif evt.get("type") == "done":
+                    ai_result = evt.get("result")
+            ai_result = ai_result or {}
+        else:
+            ai_result = await opengradient_analyzer.analyze_coin(
+                ticker=ticker,
+                tweets_summary=empty_tweets,
+                on_chain_data=on_chain_context,
+                scoring_result=scores_context
+            )
 
         # OpenGradient inference result
         ai_error = ai_result.get("error") if isinstance(ai_result, dict) else None
@@ -628,6 +689,63 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception(f"❌ Failed: {ticker}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/analyze/stream")
+async def analyze_coin_stream(request: AnalyzeRequest, db: Session = Depends(get_db)):
+    async def _event_gen():
+        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+        meta_sent = False
+
+        async def _meta_cb(meta_evt: dict) -> None:
+            nonlocal meta_sent
+            meta_sent = True
+            await queue.put(
+                (
+                    "meta",
+                    {
+                        "tx_hash": meta_evt.get("tx_hash"),
+                        "payment_hash": meta_evt.get("payment_hash"),
+                    },
+                )
+            )
+
+        async def _run() -> None:
+            nonlocal meta_sent
+            token = _ANALYZE_STREAM_META_CB.set(_meta_cb)
+            try:
+                res = await analyze_coin(request, db)
+                payload = jsonable_encoder(res)
+                if payload.get("tx_hash") and not meta_sent:
+                    await queue.put(("meta", {"tx_hash": payload.get("tx_hash"), "payment_hash": None}))
+                    meta_sent = True
+                await queue.put(("result", payload))
+            except HTTPException as e:
+                await queue.put(("error", {"detail": e.detail, "status_code": e.status_code}))
+            except Exception as e:
+                await queue.put(("error", {"detail": str(e), "status_code": 500}))
+            finally:
+                _ANALYZE_STREAM_META_CB.reset(token)
+                await queue.put(("done", {}))
+
+        asyncio.create_task(_run())
+
+        yield "event: open\ndata: {}\n\n"
+        while True:
+            event_name, data = await queue.get()
+            yield f"event: {event_name}\n" + f"data: {json.dumps(data)}\n\n"
+            if event_name == "done":
+                break
+
+    return StreamingResponse(
+        _event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

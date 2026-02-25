@@ -10,11 +10,13 @@
 # Permit2 approval is needed but use SDK built-in: client.llm.ensure_opg_approval()
 # OPG token = 18 decimals → fee per request ≈ 0.000001 OPG (near zero)
 
+import asyncio
 import json
 import logging
 import os
+import threading
 from pathlib import Path
-from typing import Optional, Any, List
+from typing import Optional, Any, List, AsyncGenerator
 import uuid
 
 # NOTE: DNS resolution and SSL handled by system - no custom patching needed
@@ -341,6 +343,7 @@ class OpenGradientAnalyzer:
     # Model fallback chain — try cheaper/faster models if main one fails
     # Note: GPT_4_1_2025_04_14 is the primary supported model for x402 payments
     MODEL_FALLBACK = [
+        "CLAUDE_4_0_SONNET",
         "GPT_4_1_2025_04_14",
         "GPT_4O",
         "CLAUDE_3_5_HAIKU",
@@ -476,6 +479,223 @@ class OpenGradientAnalyzer:
             logger.info(f"AI verdict cached for {ticker} (TTL: {CacheTTL.AI_VERDICT}s)")
 
         return result
+
+    async def analyze_coin_stream(
+        self,
+        ticker: str,
+        tweets_summary: list[dict],
+        on_chain_data: dict,
+        scoring_result: dict,
+    ) -> AsyncGenerator[dict, None]:
+        cache_key = CacheKeys.ai_verdict(ticker)
+        cached_result = await cache.get(cache_key)
+        if cached_result:
+            logger.info(f"AI verdict cache HIT for {ticker}")
+            yield {"type": "done", "result": cached_result}
+            return
+
+        input_text = self._prepare_input(ticker, tweets_summary, on_chain_data, scoring_result)
+        algo_score = scoring_result.get("overall_score", 50)
+
+        if not self._initialized:
+            error_msg = self._init_error or "OpenGradient SDK not initialized"
+            logger.error(f"❌ OpenGradient failed: {error_msg}")
+            yield {
+                "type": "done",
+                "result": {
+                    "ai_result": None,
+                    "tx_hash": None,
+                    "transaction_hash": None,
+                    "model_cid": None,
+                    "raw_output": None,
+                    "used_opengradient": False,
+                    "error": error_msg,
+                },
+            }
+            return
+
+        def _as_float(value, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        holder_count = (
+            int(_as_float(on_chain_data.get("holders", {}).get("total_holders", 0), 0.0)) if on_chain_data else 0
+        )
+        token_age_hours = (
+            _as_float(on_chain_data.get("token_info", {}).get("age_hours", 0), 0.0) if on_chain_data else 0.0
+        )
+        liquidity_usd = _as_float(on_chain_data.get("liquidity_usd", 0), 0.0) if on_chain_data else 0.0
+
+        is_established = holder_count > 10000 or token_age_hours > 720
+        is_large_cap = liquidity_usd > 1000000 or holder_count > 50000
+        if is_large_cap:
+            token_type = "large_cap"
+        elif is_established:
+            token_type = "established"
+        else:
+            token_type = "new"
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": input_text},
+        ]
+
+        model_cid = getattr(og.TEE_LLM, self._selected_model, og.TEE_LLM.GPT_4O)
+        settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
+
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _worker() -> None:
+            raw_parts: list[str] = []
+            tx_hash: Optional[str] = None
+            payment_hash: Optional[str] = None
+            try:
+                stream = self._client.llm.chat(
+                    model=model_cid,
+                    messages=messages,
+                    max_tokens=2000,
+                    temperature=0.1,
+                    x402_settlement_mode=settlement_mode,
+                    stream=True,
+                )
+
+                for chunk in stream:
+                    try:
+                        choices = getattr(chunk, "choices", None)
+                        if not choices:
+                            continue
+                        delta = getattr(choices[0], "delta", None)
+                        content = getattr(delta, "content", None) if delta is not None else None
+                    except Exception:
+                        continue
+
+                    if not content or not isinstance(content, str):
+                        continue
+
+                    if content.startswith("__OG_META__"):
+                        try:
+                            meta = json.loads(content[len("__OG_META__") :])
+                            tx_hash = meta.get("tx_hash") or tx_hash
+                            payment_hash = meta.get("payment_hash") or payment_hash
+                            loop.call_soon_threadsafe(
+                                queue.put_nowait,
+                                {
+                                    "type": "meta",
+                                    "tx_hash": tx_hash,
+                                    "payment_hash": payment_hash,
+                                },
+                            )
+                        except Exception:
+                            continue
+                        continue
+
+                    raw_parts.append(content)
+
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "error": str(e)})
+            finally:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {
+                        "type": "stream_done",
+                        "raw_output": "".join(raw_parts),
+                        "tx_hash": tx_hash,
+                        "payment_hash": payment_hash,
+                    },
+                )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        stream_error: Optional[str] = None
+        raw_output: str = ""
+        tx_hash: Optional[str] = None
+
+        while True:
+            event = await queue.get()
+            if event.get("type") == "meta":
+                yield event
+                continue
+            if event.get("type") == "error":
+                stream_error = event.get("error")
+                continue
+            if event.get("type") == "stream_done":
+                raw_output = event.get("raw_output") or ""
+                tx_hash = event.get("tx_hash")
+                break
+
+        if stream_error:
+            logger.warning(f"[METHOD A STREAM] Failed: {stream_error}")
+            yield {
+                "type": "done",
+                "result": {
+                    "ai_result": None,
+                    "tx_hash": None,
+                    "transaction_hash": None,
+                    "model_cid": None,
+                    "raw_output": raw_output,
+                    "model_used": None,
+                    "used_opengradient": False,
+                    "error": stream_error,
+                },
+            }
+            return
+
+        if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
+            err = f"x402 tx hash required but got: {tx_hash}"
+            logger.warning(f"[METHOD A STREAM] {err}")
+            yield {
+                "type": "done",
+                "result": {
+                    "ai_result": None,
+                    "tx_hash": None,
+                    "transaction_hash": tx_hash,
+                    "model_cid": self._selected_model,
+                    "raw_output": raw_output,
+                    "model_used": f"Direct LLM.chat(stream=True)/{self._selected_model}",
+                    "used_opengradient": False,
+                    "error": err,
+                },
+            }
+            return
+
+        ai_result = self._parse_ai_output(raw_output, token_type, algo_score)
+        required_fields = ["ai_trust_score", "ai_sentiment_score", "verdict", "red_flags", "green_flags"]
+        missing_fields = [f for f in required_fields if f not in ai_result]
+
+        if missing_fields:
+            logger.warning(f"[METHOD A STREAM] Missing fields: {missing_fields}")
+            yield {
+                "type": "done",
+                "result": {
+                    "ai_result": self._default_result(token_type, f"Missing fields: {missing_fields}", algo_score),
+                    "tx_hash": tx_hash if _has_real_tx_hash(tx_hash) else None,
+                    "transaction_hash": tx_hash,
+                    "model_cid": self._selected_model,
+                    "raw_output": raw_output,
+                    "model_used": f"Direct LLM.chat(stream=True)/{self._selected_model}",
+                    "used_opengradient": True,
+                },
+            }
+            return
+
+        result = {
+            "ai_result": ai_result,
+            "tx_hash": tx_hash if _has_real_tx_hash(tx_hash) else None,
+            "transaction_hash": tx_hash,
+            "model_cid": self._selected_model,
+            "raw_output": raw_output,
+            "model_used": f"Direct LLM.chat(stream=True)/{self._selected_model}",
+            "used_opengradient": True,
+        }
+
+        if result.get("ai_result"):
+            await cache.set(cache_key, result, CacheTTL.AI_VERDICT)
+            logger.info(f"AI verdict cached for {ticker} (TTL: {CacheTTL.AI_VERDICT}s)")
+
+        yield {"type": "done", "result": result}
 
     async def _run_inference(
         self,
