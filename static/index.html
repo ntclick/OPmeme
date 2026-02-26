@@ -346,6 +346,7 @@
                     <!-- Summary Info -->
                     <div class="flex-1 text-center md:text-left">
                         <div class="flex items-center justify-center md:justify-start gap-3 mb-2">
+                            <img id="tokenLogo" alt="" class="hidden w-9 h-9 rounded-full border border-white/10 bg-white/5 object-contain" />
                             <h2 class="text-4xl md:text-5xl font-black tracking-tight" id="tickerDisplay">--</h2>
                             <span class="text-xs bg-white/10 px-2 py-1 rounded font-mono text-gray-300 border border-white/10" id="cacheBadge" style="display:none;">Cached</span>
                         </div>
@@ -611,6 +612,7 @@
             riskWarning: 'Not financial advice. Meme coins are high-volatility; you can lose 100%.',
             authorLabel: 'Author:',
             chartUnavailable: 'Chart unavailable',
+            trendingLoading: 'Loading...',
         },
         vi: {
             title: 'CoinCheckGo - Kiểm định Meme Coin',
@@ -661,7 +663,7 @@
             scoringAlgo: 'Thuật toán Chấm điểm v3.1 (Kỹ thuật 65% / On-Chain 35%)',
             contract: 'Contract: ',
             unknown: 'Không rõ',
-            moon: 'Moon',
+            moon: 'MOON',
             lowRisk: 'Rủi ro Thấp',
             mediumRisk: 'Rủi ro Trung bình',
             highRisk: 'Rủi ro Cao',
@@ -672,6 +674,7 @@
             riskWarning: 'Cảnh báo: Không phải lời khuyên tài chính. Meme coin biến động rất mạnh; bạn có thể mất 100% vốn.',
             authorLabel: 'Tác giả:',
             chartUnavailable: 'Không tải được chart',
+            trendingLoading: 'Đang tải...',
         }
     };
 
@@ -812,6 +815,11 @@
 
         try {
             _trendingInFlight = true;
+
+            if (force) {
+                container.innerHTML = `<span id="trendingLabelText" class="text-gray-500 font-medium mr-2">${t.trendingLabel}</span>` +
+                    `<span class="text-gray-600 font-mono text-xs">${t.trendingLoading}</span>`;
+            }
             const resp = await fetch('/api/trending/dex/solana?limit=8');
             if (!resp.ok) return;
             const data = await resp.json();
@@ -824,7 +832,7 @@
                 const addr = it.address;
                 if (!symbol || !addr) return;
                 const title = it.name ? `${it.name} (${symbol})` : symbol;
-                html += `<span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" title="${title}" onclick="setTrendingToken('${addr}')">$${symbol}</span>`;
+                html += `<span data-trending-tag="1" class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" title="${title}" onclick="setTrendingToken('${addr}')">$${symbol}</span>`;
             });
             container.innerHTML = html;
             _trendingLastLoadedMs = Date.now();
@@ -854,6 +862,38 @@
             container.innerHTML = `<div class="w-full h-full flex items-center justify-center text-sm text-gray-500 font-mono">${t.chartUnavailable}</div>`;
         };
 
+        chartSection.classList.remove('hidden');
+        container.innerHTML = `<div class="w-full h-full flex items-center justify-center text-sm text-gray-600 font-mono">${t.trendingLoading}</div>`;
+
+        let normalized = [];
+        try {
+            const resp = await fetch(`/api/ohlcv?address=${encodeURIComponent(address)}&interval=15m&limit=200`);
+            if (!resp.ok) throw new Error('ohlcv');
+            const data = await resp.json();
+            const candles = data?.candles || [];
+            if (!Array.isArray(candles) || candles.length === 0) throw new Error('no_candles');
+
+            normalized = candles
+                .map(c => {
+                    const tt = Number(c?.time);
+                    if (!isFinite(tt)) return null;
+                    const time = tt > 1_000_000_000_000 ? Math.floor(tt / 1000) : Math.floor(tt);
+                    const open = Number(c?.open);
+                    const high = Number(c?.high);
+                    const low = Number(c?.low);
+                    const close = Number(c?.close);
+                    if (![open, high, low, close].every(v => isFinite(v))) return null;
+                    return { time, open, high, low, close };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.time - b.time);
+
+            if (normalized.length === 0) throw new Error('no_candles');
+        } catch (e) {
+            showChartError();
+            return;
+        }
+
         if (_chartResizeObs) {
             try { _chartResizeObs.disconnect(); } catch (e) {}
             _chartResizeObs = null;
@@ -866,7 +906,6 @@
         }
 
         container.innerHTML = '';
-        chartSection.classList.remove('hidden');
 
         try {
             await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -914,28 +953,6 @@
         _chartSeries = series;
 
         try {
-            const resp = await fetch(`/api/ohlcv?address=${encodeURIComponent(address)}&interval=15m&limit=200`);
-            if (!resp.ok) throw new Error('ohlcv');
-            const data = await resp.json();
-            const candles = data?.candles || [];
-            if (!Array.isArray(candles) || candles.length === 0) throw new Error('no_candles');
-
-            const normalized = candles
-                .map(c => {
-                    const t = Number(c?.time);
-                    if (!isFinite(t)) return null;
-                    const time = t > 1_000_000_000_000 ? Math.floor(t / 1000) : Math.floor(t);
-                    const open = Number(c?.open);
-                    const high = Number(c?.high);
-                    const low = Number(c?.low);
-                    const close = Number(c?.close);
-                    if (![open, high, low, close].every(v => isFinite(v))) return null;
-                    return { time, open, high, low, close };
-                })
-                .filter(Boolean)
-                .sort((a, b) => a.time - b.time);
-
-            if (normalized.length === 0) throw new Error('no_candles');
             series.setData(normalized);
             chart.timeScale().fitContent();
 
@@ -1304,6 +1321,18 @@
         const symbol = (tokenMeta.symbol || data.ticker || '').toUpperCase();
         document.getElementById('tickerDisplay').innerText = "$" + symbol;
 
+        const logoEl = document.getElementById('tokenLogo');
+        if (logoEl) {
+            const logo = tokenMeta.logo;
+            if (logo && typeof logo === 'string') {
+                logoEl.src = logo;
+                logoEl.classList.remove('hidden');
+            } else {
+                try { logoEl.removeAttribute('src'); } catch (e) {}
+                logoEl.classList.add('hidden');
+            }
+        }
+
         const tokenNameEl = document.getElementById('tokenNameDisplay');
         if (tokenNameEl) tokenNameEl.innerText = tokenMeta.name ? tokenMeta.name : '';
 
@@ -1396,7 +1425,10 @@
         }, interval);
 
         const badge = document.getElementById('riskBadge');
-        badge.innerText = data.risk_level || riskConfig.label;
+        if (badge) {
+            badge.innerText = riskConfig.label;
+            badge.className = `mt-4 px-4 py-1.5 rounded-full text-sm font-bold tracking-wider uppercase ${riskConfig.bg} ${riskConfig.text} border ${riskConfig.border}`;
+        }
         
         const breakdown = data.breakdown || {};
         const tc = breakdown.technical?.components || {};

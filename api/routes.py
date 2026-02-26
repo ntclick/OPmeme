@@ -169,7 +169,7 @@ async def get_trending_dex_solana(limit: int = 8):
             )
 
     payload = {"trending": results}
-    await cache.set(cache_key, payload, ttl=60)
+    await cache.set(cache_key, payload, ttl=60 * 60)
     return payload
 
 
@@ -603,6 +603,12 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 or birdeye_data["raw"].get("logo_url")
             )
         token_info_block = dex_data.get("info") if isinstance(dex_data, dict) else None
+        if not token_logo and isinstance(token_info_block, dict):
+            token_logo = (
+                token_info_block.get("imageUrl")
+                or token_info_block.get("image")
+                or token_info_block.get("logoURI")
+            )
         token_links = token_info_block if isinstance(token_info_block, dict) else {}
 
         market_data = {
