@@ -27,9 +27,9 @@ class AnalyzeRequest(BaseModel):
 class ScoreBreakdown(BaseModel):
     """Individual component scores."""
     # Social (15%)
-    social_score: int = Field(default=50, ge=0, le=100)
-    bot_score: int = Field(default=50, ge=0, le=100)
-    sentiment_score: int = Field(default=50, ge=0, le=100)
+    social_score: Optional[int] = Field(default=None, ge=0, le=100)
+    bot_score: Optional[int] = Field(default=None, ge=0, le=100)
+    sentiment_score: Optional[int] = Field(default=None, ge=0, le=100)
     
     # On-Chain (30%)
     holder_score: int = Field(default=50, ge=0, le=100)

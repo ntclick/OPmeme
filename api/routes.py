@@ -729,8 +729,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         
         scores_context = {
             "overall_score": overall["score"],
-            "social_score": 0,
-            "bot_score": 0,
             "holder_score": holder_score,
             "security_score": security_result.get("security_score"),
             "liquidity_score": liquidity_result.get("liquidity_score"),
@@ -849,9 +847,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             coin_id=coin.id,
             overall_score=score,
             risk_level=overall["risk"],
-            social_score=50,
-            bot_score=50,
-            sentiment_score=50,
+            social_score=None,
+            bot_score=None,
+            sentiment_score=None,
             holder_score=holder_score,
             verdict=verdict,
             red_flags=json.dumps(red_flags),
@@ -870,9 +868,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # ══════════════════════════════════════════════════════════════════════
         
         scores = ScoreBreakdown(
-            social_score=50,
-            bot_score=50,
-            sentiment_score=50,
             holder_score=holder_score,
             security_score=security_result.get("security_score"),
             momentum_score=momentum_result.get("momentum_score"),
@@ -925,12 +920,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                                 "token_age_hours": round(token_age_hours, 1) if token_age_hours is not None else None},
                     "whale_risk": {"score": whale_score, "weight": "10%", "top10_pct": top10_pct}
                 }
-            },
-            "social": {
-                "total": 0,
-                "weight": "0%",
-                "status": "DISABLED",
-                "note": "Twitter scraping will be enabled in future version"
             }
         }
         

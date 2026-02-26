@@ -1105,8 +1105,6 @@ class OpenGradientAnalyzer:
 
         # Pre-computed scores
         parts.append("\n--- ALGORITHMIC SCORES (0-100) ---")
-        parts.append(f"Social Score: {scores.get('social_score', '?')} (lower = worse community)")
-        parts.append(f"Bot Score: {scores.get('bot_score', '?')} (higher = fewer bots = BETTER)")
         parts.append(f"Holder Score: {scores.get('holder_score', '?')} (higher = better distribution)")
         parts.append(f"Liquidity Score: {scores.get('liquidity_score', '?')} (higher = better liquidity)")
         parts.append(f"Security Score: {scores.get('security_score', '?')} (higher = safer)")
@@ -1125,8 +1123,8 @@ class OpenGradientAnalyzer:
                     f"@{username} ({followers}f, {likes}👍): {text}"
                 )
         else:
-            parts.append("\n--- NO TWEETS - MAJOR RED FLAG ---")
-            parts.append("No community data available - assume high risk!")
+            parts.append("\n--- SOCIAL DATA ---")
+            parts.append("Social signals are disabled (no X/Twitter data).")
 
         return "\n".join(parts) + extra_context
 
