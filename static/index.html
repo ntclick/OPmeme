@@ -179,7 +179,7 @@
             </div>
             
             <div class="hidden md:flex items-center gap-6 text-sm text-gray-400 font-medium">
-                <button onclick="toggleLanguage()" id="langToggleBtn" class="px-2 py-1 rounded border border-white/10 hover:border-primary/50 transition">🇻🇳 VN</button>
+                <button onclick="toggleLanguage()" id="langToggleBtn" class="px-2 py-1 rounded border border-white/10 hover:border-primary/50 transition">VI</button>
                 <a href="#" id="navFeatures" class="hover:text-white transition">Features</a>
                 <a href="#" id="navTrending" class="hover:text-white transition">Trending</a>
                 <div class="flex items-center gap-1 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
@@ -238,6 +238,29 @@
                 <div id="suggestionsBox" class="suggestions-dropdown glass-panel"></div>
             </div>
             
+            <!-- LLM Model Selector -->
+            <div class="flex items-center justify-center gap-3 mt-4">
+                <span id="llmModelLabelText" class="text-xs text-gray-500 font-medium">Model:</span>
+                <select id="llmModelSelect" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-primary/60">
+                    <option value="CLAUDE_4_0_SONNET" selected>CLAUDE_4_0_SONNET</option>
+                    <option value="CLAUDE_3_7_SONNET">CLAUDE_3_7_SONNET</option>
+                    <option value="CLAUDE_3_5_HAIKU">CLAUDE_3_5_HAIKU</option>
+                    <option value="GEMINI_2_5_PRO">GEMINI_2_5_PRO</option>
+                    <option value="GEMINI_2_5_FLASH">GEMINI_2_5_FLASH</option>
+                    <option value="GEMINI_2_5_FLASH_LITE">GEMINI_2_5_FLASH_LITE</option>
+                    <option value="GEMINI_2_0_FLASH">GEMINI_2_0_FLASH</option>
+                    <option value="GPT_4_1_2025_04_14">GPT_4_1_2025_04_14</option>
+                    <option value="GPT_4O">GPT_4O</option>
+                    <option value="GROK_4_1_FAST">GROK_4_1_FAST</option>
+                    <option value="GROK_4_1_FAST_NON_REASONING">GROK_4_1_FAST_NON_REASONING</option>
+                    <option value="GROK_3_BETA">GROK_3_BETA</option>
+                    <option value="GROK_3_MINI_BETA">GROK_3_MINI_BETA</option>
+                    <option value="GROK_2_1212">GROK_2_1212</option>
+                    <option value="GROK_2_VISION_LATEST">GROK_2_VISION_LATEST</option>
+                    <option value="O4_MINI">O4_MINI</option>
+                </select>
+            </div>
+
             <!-- Trending tags below search -->
             <div class="flex flex-wrap items-center justify-center gap-2 mt-6 text-sm" id="trendingTags">
                 <span id="trendingLabelText" class="text-gray-500 font-medium mr-2">Trending:</span>
@@ -501,6 +524,13 @@
                     <i data-lucide="shield-check" class="w-4 h-4 text-primary"></i>
                     <span id="verifiableInferenceText">Verifiable inference by OpenGradient</span>
                 </div>
+                <div id="riskWarningText" class="text-xs text-gray-500 mt-1 text-center max-w-2xl">
+                    Not financial advice. Meme coins are high-volatility; you can lose 100%.
+                </div>
+                <div class="text-xs text-gray-600 mt-1">
+                    <span id="authorLabelText">Author:</span>
+                    <a href="https://x.com/trungkts29" target="_blank" rel="noopener noreferrer" class="text-primary hover:text-emerald-300 transition">@trungkts29</a>
+                </div>
                 <div id="scoringAlgoText" class="text-xs text-gray-600 font-mono mt-2" id="metaInfo">
                     Scoring Algorithm v3.1 (Technical 65% / On-Chain 35%)
                 </div>
@@ -560,13 +590,16 @@
             scoringAlgo: 'Scoring Algorithm v3.1 (Technical 65% / On-Chain 35%)',
             contract: 'Contract: ',
             unknown: 'Unknown',
-            moon: 'Moon',
+            moon: 'MOON',
             lowRisk: 'Low Risk',
             mediumRisk: 'Medium Risk',
             highRisk: 'High Risk',
             extremeRug: 'Extreme Rug Risk',
             analysisFailed: 'Analysis failed',
-            errorPrefix: 'Error: '
+            errorPrefix: 'Error: ',
+            llmModelLabel: 'Model:',
+            riskWarning: 'Not financial advice. Meme coins are high-volatility; you can lose 100%.',
+            authorLabel: 'Author:',
         },
         vi: {
             title: 'CoinCheckGo - Kiểm định Meme Coin',
@@ -594,7 +627,7 @@
             cached: 'Đã cache',
             aiBadgeTitle: 'Kiểm định AI có thể xác minh',
             aiBadgeLink: 'Xem trên OpenGradient',
-            aiBadgePending: 'Chờ xác minh AI',
+            aiBadgePending: 'Xác minh AI đang chờ',
             modelLabel: 'Mô hình',
             scoreBreakdown: 'Chi tiết Điểm số',
             techTitle: 'Kỹ thuật',
@@ -623,11 +656,19 @@
             highRisk: 'Rủi ro Cao',
             extremeRug: 'Rủi ro Rug Cực cao',
             analysisFailed: 'Phân tích thất bại',
-            errorPrefix: 'Lỗi: '
+            errorPrefix: 'Lỗi: ',
+            llmModelLabel: 'Mô hình:',
+            riskWarning: 'Cảnh báo: Không phải lời khuyên tài chính. Meme coin biến động rất mạnh; bạn có thể mất 100% vốn.',
+            authorLabel: 'Tác giả:',
         }
     };
 
     let currentLang = 'en';
+
+    function toggleLanguage() {
+        currentLang = currentLang === 'en' ? 'vi' : 'en';
+        applyLanguage();
+    }
 
     function applyLanguage() {
         const t = translations[currentLang];
@@ -686,6 +727,18 @@
         
         document.getElementById('verifiableInferenceText').innerText = t.verifiableInference;
         document.getElementById('scoringAlgoText').innerText = t.scoringAlgo;
+        
+        const langBtn = document.getElementById('langToggleBtn');
+        if (langBtn) langBtn.innerText = currentLang === 'vi' ? 'EN' : 'VI';
+
+        const llmModelLabel = document.getElementById('llmModelLabelText');
+        if (llmModelLabel) llmModelLabel.innerText = t.llmModelLabel;
+
+        const riskWarning = document.getElementById('riskWarningText');
+        if (riskWarning) riskWarning.innerText = t.riskWarning;
+
+        const authorLabel = document.getElementById('authorLabelText');
+        if (authorLabel) authorLabel.innerText = t.authorLabel;
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -846,7 +899,7 @@
         }
         
         // Skip if input looks like a contract address
-        if (query.length > 30) {
+        if (query.length > 30 && !query.includes(' ')) {
             document.getElementById('suggestionsBox').classList.remove('show');
             return;
         }
@@ -1011,6 +1064,10 @@
         if (input.length > 30 && !input.includes(' ')) {
             requestBody.contract_address = input;
         }
+
+        const llmSelect = document.getElementById('llmModelSelect');
+        const selectedModel = (llmSelect && llmSelect.value) ? String(llmSelect.value) : 'CLAUDE_4_0_SONNET';
+        requestBody.llm_model = selectedModel;
 
         const btn = document.getElementById('analyzeBtn');
         const loading = document.getElementById('loading');
@@ -1291,8 +1348,8 @@
             ogBtn.href = "#";
             ogBtn.classList.add('opacity-50', 'pointer-events-none');
             aiBadgeLinkText.innerText = data.model_used
-                ? `AI verified (${data.model_used}, no tx hash)`
-                : 'AI verified (no tx hash)';
+                ? `AI verified (${data.model_used})`
+                : 'AI verified';
             document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
             ogBtn.classList.remove('from-blue-900/40', 'to-blue-950/40');
             ogBtn.classList.add('from-gray-900', 'to-black');

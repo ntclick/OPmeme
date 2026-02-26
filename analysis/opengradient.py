@@ -80,6 +80,13 @@ def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
     return "GPT_4O"
 
 
+def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    model = str(value).strip().upper()
+    return model or None
+
+
 def _has_real_tx_hash(tx_hash: Any) -> bool:
     if not isinstance(tx_hash, str):
         return False
@@ -228,6 +235,13 @@ Your analysis is verified on-chain via OpenGradient TEE — your output is immut
 ROLE: You are the PRIMARY SCORING AUTHORITY. The algorithmic pre-scores are provided as
 reference data, but YOU make the final trust assessment based on ALL evidence.
 
+BEGINNER-FIRST STYLE (CRITICAL):
+- Write for a complete beginner.
+- Use simple words. No jargon. No slang. No memes.
+- No emojis.
+- Be explicit about what is known vs unknown.
+- Always include a clear safety warning in the verdict (NOT financial advice; high-volatility; you can lose 100%).
+
 CRITICAL TOKEN CLASSIFICATION:
 Before scoring, classify the token type based on the provided "Token Profile":
 
@@ -304,9 +318,9 @@ OUTPUT FORMAT - You MUST output valid JSON with this EXACT structure:
 {
   "ai_trust_score": <integer 0-100>,
   "ai_sentiment_score": <integer 0-100>,
-  "verdict": "<2-3 short sentences in plain language for beginners. Avoid crypto slang. Explain what is good, what is risky, and what action a new investor should take>",
-  "red_flags": ["<SPECIFIC, DETAILED concerns with NUMBERS. e.g., 'Top 3 wallets hold 67% of supply - whale risk' NOT just 'whale risk'>"],
-  "green_flags": ["<SPECIFIC, DETAILED positives with NUMBERS. e.g., '12.4K organic tweets from 3.2K unique authors' NOT just 'good community'>"],
+  "verdict": "<2-4 short sentences. MUST be beginner-friendly. Include: (1) plain summary of risk, (2) what is good, (3) what is risky, (4) what a newbie should do next (avoid/wait/DYOR). MUST include a safety warning: 'Not financial advice' and 'you can lose 100%'.>",
+  "red_flags": ["<Risk Factors (Red Flags). Each item MUST be 1 short sentence with NUMBERS + why it matters. Format: '<Issue with evidence> — <why it matters in plain words>'. Example: 'Top 10 holders own 67% of supply — a few wallets can dump and crash the price.'>"],
+  "green_flags": ["<Positive Signals (Green Flags). Each item MUST be 1 short sentence with NUMBERS + why it matters. Format: '<Signal with evidence> — <why it matters in plain words>'. Example: 'Mint authority renounced — supply cannot be inflated by printing more tokens.'>"],
   "bot_likelihood": "<NONE | LOW | MEDIUM | HIGH | EXTREME>",
   "recommendation": "<AVOID | RISKY | DYOR | LOOKS_OK | BULLISH>",
   "scoring_rationale": "<2-3 short sentences using simple arithmetic and plain words. Example: 'Base 45 for established token, -20 for whale concentration, +5 for good liquidity, final 30'>",
@@ -319,9 +333,10 @@ RULES:
 2. For LARGE-CAP ESTABLISHED tokens (50K+ holders, 6+ months old): Be fair. Don't penalize heavily for minor issues. These have proven staying power.
 3. For NEW tokens: Be BRUTAL. Require PROOF of legitimacy. Most new meme coins are rugs.
 4. ALWAYS cite NUMBERS in red_flags and green_flags. Specific data points are required.
-5. If twitter_real=false or onchain_real=false, note this in red_flags and be more conservative.
-6. Use beginner-friendly language. No jargon, no slang, no memes.
-7. Output ONLY the JSON object, nothing else before or after.
+5. If twitter_real=false or onchain_real=false, add a red_flags item that explains what is missing and that the result is less reliable.
+6. If a key risk metric is missing/unknown, treat it as a risk and put it in red_flags as "Unknown/Unavailable" with the consequence.
+7. Keep lists short and readable: max 6 red_flags and max 6 green_flags.
+8. Output ONLY the JSON object, nothing else before or after.
 """
 
 
@@ -452,6 +467,7 @@ class OpenGradientAnalyzer:
         tweets_summary: list[dict],
         on_chain_data: dict,
         scoring_result: dict,
+        llm_model: Optional[str] = None,
     ) -> dict:
         """
         Run verifiable AI inference on OpenGradient.
@@ -462,7 +478,12 @@ class OpenGradientAnalyzer:
         3. Cache result for 30 minutes
         """
         # Check cache first
-        cache_key = CacheKeys.ai_verdict(ticker)
+        requested_model = _normalize_llm_model_enum(llm_model)
+        selected_model = self._selected_model
+        if requested_model:
+            selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
+
+        cache_key = CacheKeys.ai_verdict(ticker, selected_model)
         cached_result = await cache.get(cache_key)
         if cached_result:
             logger.info(f"AI verdict cache HIT for {ticker}")
@@ -470,7 +491,11 @@ class OpenGradientAnalyzer:
         
         # Run Inference
         result = await self._run_inference(
-            ticker, tweets_summary, on_chain_data, scoring_result
+            ticker,
+            tweets_summary,
+            on_chain_data,
+            scoring_result,
+            llm_model=selected_model,
         )
 
         # Cache successful result
@@ -486,8 +511,14 @@ class OpenGradientAnalyzer:
         tweets_summary: list[dict],
         on_chain_data: dict,
         scoring_result: dict,
+        llm_model: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
-        cache_key = CacheKeys.ai_verdict(ticker)
+        requested_model = _normalize_llm_model_enum(llm_model)
+        selected_model = self._selected_model
+        if requested_model:
+            selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
+
+        cache_key = CacheKeys.ai_verdict(ticker, selected_model)
         cached_result = await cache.get(cache_key)
         if cached_result:
             logger.info(f"AI verdict cache HIT for {ticker}")
@@ -542,7 +573,7 @@ class OpenGradientAnalyzer:
             {"role": "user", "content": input_text},
         ]
 
-        model_cid = getattr(og.TEE_LLM, self._selected_model, og.TEE_LLM.GPT_4O)
+        model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4O)
         settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
 
         queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -652,9 +683,9 @@ class OpenGradientAnalyzer:
                     "ai_result": None,
                     "tx_hash": None,
                     "transaction_hash": tx_hash,
-                    "model_cid": self._selected_model,
+                    "model_cid": selected_model,
                     "raw_output": raw_output,
-                    "model_used": f"Direct LLM.chat(stream=True)/{self._selected_model}",
+                    "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
                     "used_opengradient": False,
                     "error": err,
                 },
@@ -678,9 +709,9 @@ class OpenGradientAnalyzer:
                     "ai_result": self._default_result(token_type, f"Missing fields: {missing_fields}", algo_score),
                     "tx_hash": tx_hash if _has_real_tx_hash(tx_hash) else None,
                     "transaction_hash": tx_hash,
-                    "model_cid": self._selected_model,
+                    "model_cid": selected_model,
                     "raw_output": raw_output,
-                    "model_used": f"Direct LLM.chat(stream=True)/{self._selected_model}",
+                    "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
                     "used_opengradient": True,
                 },
             }
@@ -690,9 +721,9 @@ class OpenGradientAnalyzer:
             "ai_result": ai_result,
             "tx_hash": tx_hash if _has_real_tx_hash(tx_hash) else None,
             "transaction_hash": tx_hash,
-            "model_cid": self._selected_model,
+            "model_cid": selected_model,
             "raw_output": raw_output,
-            "model_used": f"Direct LLM.chat(stream=True)/{self._selected_model}",
+            "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
             "used_opengradient": True,
         }
 
@@ -709,6 +740,7 @@ class OpenGradientAnalyzer:
         on_chain_data: dict,
         scoring_result: dict,
         extra_context: str = "",
+        llm_model: Optional[str] = None,
     ) -> dict:
         """
         Run AI inference with dual approach:
@@ -760,6 +792,11 @@ class OpenGradientAnalyzer:
         # ════════════════════════════════════════════════════════════════════════
         try:
             logger.info(f"🧠 [METHOD A] Running og.llm_chat()...")
+
+            requested_model = _normalize_llm_model_enum(llm_model)
+            selected_model = self._selected_model
+            if requested_model:
+                selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
             
             # Build messages for direct chat
             messages = [
@@ -768,7 +805,7 @@ class OpenGradientAnalyzer:
             ]
             
             # Use TEE_LLM from SDK
-            model_cid = getattr(og.TEE_LLM, self._selected_model, og.TEE_LLM.GPT_4O)
+            model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4O)
             
             # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
             # Use SETTLE mode for real tx hash
@@ -818,9 +855,9 @@ class OpenGradientAnalyzer:
                         "ai_result": ai_result,
                         "tx_hash": tx_hash if _has_real_tx_hash(tx_hash) else None,
                         "transaction_hash": tx_hash,
-                        "model_cid": self._selected_model,
+                        "model_cid": selected_model,
                         "raw_output": raw_output,
-                        "model_used": f"Direct LLM.chat()/{self._selected_model}",
+                        "model_used": f"Direct LLM.chat()/{selected_model}",
                         "used_opengradient": True,
                     }
                 else:
@@ -841,7 +878,13 @@ class OpenGradientAnalyzer:
             tools = []
             
             # Initialize Agent
-            agent = create_react_agent(self._llm, tools)
+            requested_model = _normalize_llm_model_enum(llm_model)
+            selected_model = self._selected_model
+            if requested_model:
+                selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
+            llm = SafeOpenGradientLLM(client=self._client, model_enum=selected_model)
+
+            agent = create_react_agent(llm, tools)
             
             # Run Agent
             final_state = await agent.ainvoke(

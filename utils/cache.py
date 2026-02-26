@@ -123,20 +123,28 @@ class CacheKeys:
         return f"tweets:{normalized}"
     
     @staticmethod
-    def full_analysis(identifier: str) -> str:
+    def full_analysis(identifier: str, llm_model: Optional[str] = None) -> str:
         # If identifier looks like a mint address (base58, 32-44 chars), use as-is
         # Otherwise normalize as ticker (uppercase, strip $/#)
+        model = (llm_model or "").strip().upper()
         if len(identifier) > 30 and identifier.isalnum():
             # Likely a Solana mint address
+            if model:
+                return f"analysis:{identifier}:{model}"
             return f"analysis:{identifier}"
         # Normalize as ticker
         normalized = identifier.upper().lstrip("$#").strip()
+        if model:
+            return f"analysis:{normalized}:{model}"
         return f"analysis:{normalized}"
     
     @staticmethod
-    def ai_verdict(ticker: str) -> str:
+    def ai_verdict(ticker: str, llm_model: Optional[str] = None) -> str:
         # Normalize ticker: remove $/# prefix, uppercase, strip whitespace
         normalized = ticker.upper().lstrip("$#").strip()
+        model = (llm_model or "").strip().upper()
+        if model:
+            return f"ai_verdict:{normalized}:{model}"
         return f"ai_verdict:{normalized}"
 
 

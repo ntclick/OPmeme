@@ -232,7 +232,39 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
     ticker = request.ticker.strip().strip("$#")
     contract_address = request.contract_address
     force_refresh = getattr(request, 'force_refresh', False)
+    llm_model = getattr(request, "llm_model", None)
     start_time = time.time()
+
+    def _normalize_llm_model(value: str | None) -> str | None:
+        if value is None:
+            return None
+        model = str(value).strip().upper()
+        return model or None
+
+    allowed_llm_models = {
+        "CLAUDE_3_5_HAIKU",
+        "CLAUDE_3_7_SONNET",
+        "CLAUDE_4_0_SONNET",
+        "GEMINI_2_0_FLASH",
+        "GEMINI_2_5_FLASH",
+        "GEMINI_2_5_FLASH_LITE",
+        "GEMINI_2_5_PRO",
+        "GPT_4O",
+        "GPT_4_1_2025_04_14",
+        "GROK_2_1212",
+        "GROK_2_VISION_LATEST",
+        "GROK_3_BETA",
+        "GROK_3_MINI_BETA",
+        "GROK_4_1_FAST",
+        "GROK_4_1_FAST_NON_REASONING",
+        "O4_MINI",
+    }
+
+    normalized_model = _normalize_llm_model(llm_model)
+    if normalized_model and normalized_model not in allowed_llm_models:
+        logger.warning(f"Invalid llm_model requested: {normalized_model}. Falling back to default.")
+        normalized_model = None
+    effective_model = normalized_model or "CLAUDE_4_0_SONNET"
     
     # Detect chain type
     chain_type = _detect_chain(contract_address or ticker)
@@ -291,7 +323,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
 
     # Check cache
     if not force_refresh:
-        cache_key = CacheKeys.full_analysis(contract_address or ticker)
+        cache_key = CacheKeys.full_analysis(contract_address or ticker, effective_model)
         cached = await cache.get(cache_key)
         if cached:
             cached["cached"] = True
@@ -299,9 +331,18 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             return AnalyzeResponse(**cached)
     else:
         # Clear AI verdict cache when force refresh
-        ai_cache_key = CacheKeys.ai_verdict(ticker)
-        await cache.delete(ai_cache_key)
-        logger.info(f"🗑️ AI verdict cache cleared for {ticker}")
+        keys_to_clear = [
+            CacheKeys.ai_verdict(ticker),
+            CacheKeys.ai_verdict(ticker, effective_model),
+            CacheKeys.full_analysis(contract_address or ticker),
+            CacheKeys.full_analysis(contract_address or ticker, effective_model),
+        ]
+        for k in keys_to_clear:
+            try:
+                await cache.delete(k)
+            except Exception:
+                pass
+        logger.info(f"🗑️ Cache cleared for {ticker} (model={effective_model})")
 
     try:
         # Ensure coin in DB
@@ -484,28 +525,28 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # Technical signals
         trend = momentum_result.get("trend")
         if trend == "DUMP_AFTER_PUMP":
-            red_flags.append("🔴 Dump after pump pattern")
+            red_flags.append("Dump-after-pump pattern — fast spikes often crash quickly")
         elif trend == "STRONG_BEARISH":
-            red_flags.append("🔴 Strong bearish trend")
+            red_flags.append("Strong bearish trend — momentum is down")
         elif trend == "STRONG_BULLISH":
-            green_flags.append("🟢 Strong bullish trend")
+            green_flags.append("Strong bullish trend — momentum is up")
         
         # Volume signals
         buy_pct = volume_result.get("buy_volume_pct", 50)
         if buy_pct > 65:
-            green_flags.append(f"🟢 Buy pressure dominant ({buy_pct:.0f}%)")
+            green_flags.append(f"Buy pressure dominant ({buy_pct:.0f}%) — more buys than sells recently")
         elif buy_pct < 35:
-            red_flags.append(f"🔴 Heavy sell pressure ({100-buy_pct:.0f}%)")
+            red_flags.append(f"Heavy sell pressure ({100-buy_pct:.0f}%) — more sells than buys recently")
         
         # Liquidity signals
         if liq_usd > 500000:
-            green_flags.append(f"🟢 Good liquidity (${liq_usd:,.0f})")
+            green_flags.append(f"Good liquidity (${liq_usd:,.0f}) — easier to trade without big price swings")
         elif liq_usd < 50000 and liq_usd > 0:
-            red_flags.append(f"🔴 Low liquidity (${liq_usd:,.0f})")
+            red_flags.append(f"Low liquidity (${liq_usd:,.0f}) — small trades can move price a lot")
         
         # Security signals
         if token_info.get("is_mint_renounced") or token_info.get("mint_authority") is None:
-            green_flags.append("🟢 Mint authority renounced ✓")
+            green_flags.append("Mint authority renounced — supply cannot be inflated by printing more tokens")
         
         # ══════════════════════════════════════════════════════════════════════
         # STEP 5: Run OpenGradient AI Inference
@@ -605,6 +646,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 tweets_summary=empty_tweets,
                 on_chain_data=on_chain_context,
                 scoring_result=scores_context,
+                llm_model=effective_model,
             ):
                 if evt.get("type") == "meta":
                     await stream_meta_cb(evt)
@@ -616,7 +658,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 ticker=ticker,
                 tweets_summary=empty_tweets,
                 on_chain_data=on_chain_context,
-                scoring_result=scores_context
+                scoring_result=scores_context,
+                llm_model=effective_model,
             )
 
         # OpenGradient inference result
@@ -658,17 +701,38 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         
         # Generate verdict từ ALGORITHMIC score (không dùng AI)
         if not ai_inference_success or not verdict:
+            top_green = green_flags[0] if green_flags else None
+            top_red = red_flags[0] if red_flags else None
+
             if score >= 70:
-                verdict = f"${ticker}: Strong technical metrics. Relatively safe for meme coin."
+                verdict = (
+                    f"${ticker}: Lower risk than average for a meme coin based on current on-chain + market signals. "
+                    f"Positive signal: {top_green or 'none detected'}. "
+                    f"Main risk: {top_red or 'none detected'}. "
+                    "Not financial advice. Meme coins are high-volatility; you can lose 100%."
+                )
             elif score >= 50:
-                verdict = f"${ticker}: Mixed signals. DYOR before investing."
+                verdict = (
+                    f"${ticker}: Mixed signals. Positive signal: {top_green or 'none detected'}. "
+                    f"Main risk: {top_red or 'none detected'}. "
+                    "If you are new, consider waiting and researching more. "
+                    "Not financial advice. Meme coins are high-volatility; you can lose 100%."
+                )
             elif score >= 35:
-                verdict = f"${ticker}: Multiple risk factors. High risk."
+                verdict = (
+                    f"${ticker}: High risk. Main risk: {top_red or 'multiple risk factors'}. "
+                    "If you are new, avoid or only risk money you can afford to lose. "
+                    "Not financial advice. Meme coins are high-volatility; you can lose 100%."
+                )
             else:
-                verdict = f"${ticker}: Extreme caution. Very high risk of loss."
-                
+                verdict = (
+                    f"${ticker}: Extreme caution. Main risk: {top_red or 'severe risk factors'}. "
+                    "For beginners, the safest action is to avoid. "
+                    "Not financial advice. Meme coins are high-volatility; you can lose 100%."
+                )
+
             if overall.get("cap"):
-                verdict += f" (Capped at {overall['cap']} due to risk factors)"
+                verdict += f" (Score was capped at {overall['cap']}/100 due to risk factors.)"
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 6: Save to DB
@@ -796,7 +860,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         }
         
         # Cache
-        await cache.set(CacheKeys.full_analysis(contract_address or ticker), response, CacheTTL.FULL_ANALYSIS)
+        await cache.set(CacheKeys.full_analysis(contract_address or ticker, effective_model), response, CacheTTL.FULL_ANALYSIS)
         
         logger.info(f"✅ Done {ticker} in {duration_ms}ms | score={score} risk={overall['risk']}")
         
@@ -958,60 +1022,89 @@ def _calc_overall_v31(
     if token_info.get("mint_authority") and not token_info.get("is_mint_renounced"):
         if is_large:
             cap = min(cap, 70)
-            overrides.append("🟡 Mint authority ACTIVE (large cap) → max 70")
+            overrides.append(
+                "Mint authority is active (large-cap) — supply can be increased; max score 70/100"
+            )
         elif is_established:
             cap = min(cap, 55)
-            overrides.append("🟡 Mint authority ACTIVE (established) → max 55")
+            overrides.append(
+                "Mint authority is active (established) — supply can be increased; max score 55/100"
+            )
         else:
             cap = min(cap, 35)
-            overrides.append("🔴 Mint authority ACTIVE → max 35")
+            overrides.append(
+                "Mint authority is active — the team can print more tokens; max score 35/100"
+            )
     
     # Low liquidity
     if liq_usd < 10000:
         if is_established:
             cap = min(cap, 50)
-            overrides.append("🟡 Liquidity < $10K (established) → max 50")
+            overrides.append(
+                f"Very low liquidity (${liq_usd:,.0f}) — small trades can move price a lot; max score 50/100"
+            )
         else:
             cap = min(cap, 30)
-            overrides.append("🔴 Liquidity < $10K → max 30")
+            overrides.append(
+                f"Very low liquidity (${liq_usd:,.0f}) — easy to manipulate and hard to exit; max score 30/100"
+            )
     
     # Whale concentration
-    top10 = holder_data.get("top10_pct", 0)
+    top10 = holder_data.get("top10_pct", 0) or 0
     if top10 > 80:
         if is_large:
             cap = min(cap, 65)
-            overrides.append("🟡 Top 10 > 80% (large cap) → max 65")
+            overrides.append(
+                f"Top 10 wallets hold {top10:.1f}% of supply (large-cap) — a few wallets can crash the price; max score 65/100"
+            )
         elif is_established:
             cap = min(cap, 50)
-            overrides.append("🟡 Top 10 > 80% (established) → max 50")
+            overrides.append(
+                f"Top 10 wallets hold {top10:.1f}% of supply (established) — high dump risk; max score 50/100"
+            )
         else:
             cap = min(cap, 30)
-            overrides.append("🔴 Top 10 hold > 80% → max 30")
+            overrides.append(
+                f"Top 10 wallets hold {top10:.1f}% of supply — a few wallets control the price; max score 30/100"
+            )
     
     # Low holders
     if holder_count and holder_count < 100:
         cap = min(cap, 35)
-        overrides.append("🔴 Holders < 100 → max 35")
+        overrides.append(
+            f"Very few holders ({holder_count}) — easy for insiders to control price; max score 35/100"
+        )
     elif holder_count and holder_count < 500 and not is_established:
         cap = min(cap, 45)
-        overrides.append("🟡 Holders < 500 → max 45")
+        overrides.append(
+            f"Low holder count ({holder_count}) — price can be unstable; max score 45/100"
+        )
     
     # New token
     if age_hours < 24:
         if holder_count > 1000:
             cap = min(cap, 55)
-            overrides.append("🟡 Token < 24h but trending → max 55")
+            overrides.append(
+                f"Token is very new ({age_hours:.1f}h old) — early hype can reverse fast; max score 55/100"
+            )
         else:
             cap = min(cap, 40)
-            overrides.append("🔴 Token < 24h old → max 40")
+            overrides.append(
+                f"Token is very new ({age_hours:.1f}h old) — highest rug/volatility window; max score 40/100"
+            )
     
     # Freeze authority
     if token_info.get("freeze_authority"):
         if is_large:
             cap = min(cap, 75)
+            overrides.append(
+                "Freeze authority is active (large-cap) — token accounts can be frozen; max score 75/100"
+            )
         else:
             cap = min(cap, 50)
-            overrides.append("🟡 Freeze authority active → max 50")
+            overrides.append(
+                "Freeze authority is active — token accounts can be frozen; max score 50/100"
+            )
     
     final = max(0, min(100, min(int(raw), cap)))
     

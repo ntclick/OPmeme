@@ -18,6 +18,11 @@ class AnalyzeRequest(BaseModel):
         False, description="Skip cache and re-analyze from scratch"
     )
 
+    llm_model: Optional[str] = Field(
+        None,
+        description="OpenGradient TEE_LLM model enum name (e.g. CLAUDE_4_0_SONNET). If not set, server default is used.",
+    )
+
 
 class ScoreBreakdown(BaseModel):
     """Individual component scores."""
