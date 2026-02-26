@@ -271,25 +271,29 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
     logger.info(f"📊 ===== ANALYSIS START: '{ticker}' =====")
     logger.info(f"📍 Chain: {chain_type}, ticker: '{ticker}', contract: '{contract_address}', refresh: {force_refresh}")
 
-    # Auto-detect contract address from input
-    if len(ticker) > 30 and " " not in ticker and not contract_address:
-        contract_address = ticker
+    # Auto-detect / normalize contract-address inputs.
+    # If the user types/pastes an address into the ticker field, we still want to resolve a real symbol
+    # even when request.contract_address is already provided (frontend sends both).
+    if len(ticker) > 30 and " " not in ticker:
+        if not contract_address:
+            contract_address = ticker
         chain_type = _detect_chain(contract_address)
-        logger.info(f"📍 Auto-detected contract: {contract_address[:8]}... (chain: {chain_type})")
-        
-        # Try to resolve ticker from contract
+        logger.info(f"📍 Detected contract-like input: {contract_address[:8]}... (chain: {chain_type})")
+
+        # Try to resolve ticker from address (helps UI show symbol instead of raw address)
         if chain_type == "solana":
             try:
                 resolved = await solana_scraper.get_token_symbol(contract_address)
                 ticker = resolved.upper() if resolved else ticker[:8].upper()
-            except:
+            except Exception:
                 ticker = ticker[:8].upper()
         elif chain_type == "evm":
-            # For EVM, use truncated address as ticker if none provided
+            ticker = ticker[:8].upper()
+        else:
             ticker = ticker[:8].upper()
     else:
         ticker = ticker.upper()
-        
+
         # Search DexScreener for contract if not provided
         if not contract_address:
             logger.info(f"🔍 Searching DexScreener for {ticker}...")
@@ -302,7 +306,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     if search_resp.status_code == 200:
                         search_data = search_resp.json()
                         pairs = search_data.get("pairs", [])
-                        
+
                         # Filter by chain priority: solana, base, eth, bsc
                         for target_chain in ["solana", "base", "ethereum", "bsc"]:
                             chain_pairs = [p for p in pairs if p.get("chainId") == target_chain]
@@ -364,34 +368,98 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             logger.info(f"� Fetching DexScreener...")
             try:
                 async with httpx.AsyncClient() as client:
+                    requested_addr = contract_address
+                    requested_addr_l = requested_addr.lower() if isinstance(requested_addr, str) else ""
+
+                    # Token endpoint first
                     resp = await client.get(
                         f"https://api.dexscreener.com/latest/dex/tokens/{contract_address}",
-                        timeout=10.0
+                        timeout=10.0,
                     )
+                    pairs = []
                     if resp.status_code == 200:
-                        pairs = resp.json().get("pairs", [])
-                        if pairs:
-                            # Filter by chain
-                            chain_pairs = [p for p in pairs if p.get("baseToken", {}).get("address", "").lower() == contract_address.lower()]
-                            if chain_pairs:
-                                dex_data = max(chain_pairs, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0)
-                                # Canonicalize address for case-sensitive chains (Solana base58)
-                                base_addr = _safe_get(dex_data, "baseToken", "address")
-                                if base_addr and contract_address and chain_type == "solana" and base_addr != contract_address:
-                                    logger.info(f"🔧 Normalized Solana address: {contract_address[:8]}... → {base_addr[:8]}...")
-                                    contract_address = base_addr
-                                created = dex_data.get("pairCreatedAt", 0)
-                                if created:
-                                    token_age_hours = (time.time() * 1000 - created) / (1000 * 3600)
-                                # Update ticker from DexScreener if different
-                                base_token = dex_data.get("baseToken", {})
-                                if base_token.get("symbol"):
-                                    ticker = base_token["symbol"].upper()
-                                age_str = f"{token_age_hours:.1f}h" if token_age_hours is not None else "unknown"
-                                logger.info(
-                                    f"✅ DexScreener: Liq=${_safe_get(dex_data, 'liquidity', 'usd') or 0:,.0f}, "
-                                    f"Age={age_str}"
+                        pairs = resp.json().get("pairs", []) or []
+
+                    # Prefer pairs where the input matches either baseToken or quoteToken.
+                    chain_pairs = []
+                    if requested_addr_l:
+                        chain_pairs = [
+                            p
+                            for p in pairs
+                            if (
+                                p.get("baseToken", {}).get("address", "").lower() == requested_addr_l
+                                or p.get("quoteToken", {}).get("address", "").lower() == requested_addr_l
+                            )
+                        ]
+
+                    # If not found, user likely pasted a *pair address*.
+                    if not chain_pairs:
+                        pair_candidates = []
+                        try:
+                            if chain_type == "solana":
+                                pair_resp = await client.get(
+                                    f"https://api.dexscreener.com/latest/dex/pairs/solana/{contract_address}",
+                                    timeout=10.0,
                                 )
+                                if pair_resp.status_code == 200:
+                                    pair_candidates = pair_resp.json().get("pairs", []) or []
+                            elif chain_type == "evm":
+                                # Try a small set of common EVM chains.
+                                for ch in ("base", "ethereum", "bsc"):
+                                    pair_resp = await client.get(
+                                        f"https://api.dexscreener.com/latest/dex/pairs/{ch}/{contract_address}",
+                                        timeout=10.0,
+                                    )
+                                    if pair_resp.status_code == 200:
+                                        pair_candidates = pair_resp.json().get("pairs", []) or []
+                                        if pair_candidates:
+                                            break
+                        except Exception:
+                            pair_candidates = []
+
+                        if pair_candidates:
+                            chain_pairs = pair_candidates
+
+                    if chain_pairs:
+                        dex_data = max(
+                            chain_pairs,
+                            key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0,
+                        )
+
+                        base_addr = _safe_get(dex_data, "baseToken", "address")
+                        quote_addr = _safe_get(dex_data, "quoteToken", "address")
+
+                        # Determine which token in the pair corresponds to the requested contract.
+                        # If not matched, assume the user pasted a *pair address* and default to baseToken.
+                        token_side = "base"
+                        if requested_addr_l and quote_addr and str(quote_addr).lower() == requested_addr_l:
+                            token_side = "quote"
+                        elif requested_addr_l and base_addr and str(base_addr).lower() == requested_addr_l:
+                            token_side = "base"
+
+                        token_from_pair = (
+                            dex_data.get("quoteToken") if token_side == "quote" else dex_data.get("baseToken")
+                        )
+
+                        # Canonicalize contract to the matched token address when available.
+                        token_addr = token_from_pair.get("address") if isinstance(token_from_pair, dict) else None
+                        if token_addr and contract_address and str(token_addr).lower() != contract_address.lower():
+                            logger.info(f"🔧 Normalized token address: {contract_address[:8]}... → {str(token_addr)[:8]}...")
+                            contract_address = token_addr
+
+                        created = dex_data.get("pairCreatedAt", 0)
+                        if created:
+                            token_age_hours = (time.time() * 1000 - created) / (1000 * 3600)
+
+                        # Update ticker from DexScreener if different
+                        if isinstance(token_from_pair, dict) and token_from_pair.get("symbol"):
+                            ticker = str(token_from_pair["symbol"]).upper()
+
+                        age_str = f"{token_age_hours:.1f}h" if token_age_hours is not None else "unknown"
+                        logger.info(
+                            f"✅ DexScreener: Liq=${_safe_get(dex_data, 'liquidity', 'usd') or 0:,.0f}, "
+                            f"Age={age_str}"
+                        )
             except Exception as e:
                 logger.warning(f"⚠️ DexScreener failed: {e}")
             
@@ -595,8 +663,24 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             chart_url = f"{dex_url}{sep}embed=1&theme=dark"
 
         dex_base = dex_data.get("baseToken") if isinstance(dex_data, dict) else None
-        token_name = dex_base.get("name") if isinstance(dex_base, dict) else None
-        token_symbol = dex_base.get("symbol") if isinstance(dex_base, dict) else None
+        dex_quote = dex_data.get("quoteToken") if isinstance(dex_data, dict) else None
+
+        dex_token = None
+        try:
+            ca_l = contract_address.lower() if isinstance(contract_address, str) else ""
+            if ca_l and isinstance(dex_base, dict) and str(dex_base.get("address") or "").lower() == ca_l:
+                dex_token = dex_base
+            elif ca_l and isinstance(dex_quote, dict) and str(dex_quote.get("address") or "").lower() == ca_l:
+                dex_token = dex_quote
+        except Exception:
+            dex_token = None
+        if not isinstance(dex_token, dict):
+            dex_token = dex_base if isinstance(dex_base, dict) else None
+
+        token_name = dex_token.get("name") if isinstance(dex_token, dict) else None
+        token_symbol = dex_token.get("symbol") if isinstance(dex_token, dict) else None
+        if not token_symbol and isinstance(token_info, dict):
+            token_symbol = token_info.get("symbol")
         token_logo = None
         if isinstance(birdeye_data.get("raw"), dict):
             token_logo = (

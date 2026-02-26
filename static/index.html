@@ -1354,9 +1354,9 @@
         const addrForDisplay = (data.contract_address || tokenMeta.address || '').toString();
         const rawSymbol = (tokenMeta.symbol || data.ticker || '').toString();
         const symbol = rawSymbol.toUpperCase();
-        const looksLikeAddress = symbol && symbol.length > 15 && !symbol.includes(' ');
+        const looksLikeAddress = symbol && symbol.length > 30 && !symbol.includes(' ');
         const isSameAsAddress = addrForDisplay && symbol && addrForDisplay.toUpperCase() === symbol;
-        const hasGoodSymbol = symbol && symbol.length > 0 && symbol.length <= 15 && !isSameAsAddress;
+        const hasGoodSymbol = symbol && symbol.length > 0 && symbol.length <= 30 && !looksLikeAddress && !isSameAsAddress;
 
         if (hasGoodSymbol) {
             document.getElementById('tickerDisplay').innerText = "$" + symbol;
@@ -1392,7 +1392,7 @@
         const chartSection = document.getElementById('chartSection');
         if (chartSection) {
             const chartUrl = market.chart_url;
-            const chartAddress = data.contract_address || tokenMeta.address || market.contract_address;
+            const chartAddress = tokenMeta.address || data.contract_address || market.contract_address;
             if (chartUrl && typeof chartUrl === 'string') {
                 renderDexChart(chartUrl);
             } else if (chartAddress) {
