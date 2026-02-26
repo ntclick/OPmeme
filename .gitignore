@@ -12,7 +12,9 @@ __pycache__
 # Logs and databases
 *.log
 *.sqlite
+coincheckgo.db
 tmp/
+scripts/
 
 # IDE settings
 .vscode/
@@ -20,4 +22,4 @@ tmp/
 opengradient_sdk/
 inspect_og.py
 reproduce_crash.py
-OpenGradient-SDK/ 
+OpenGradient-SDK/

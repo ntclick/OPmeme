@@ -218,9 +218,23 @@ class SolanaScraper:
         """
         # Resolve actual mint address first
         token_info = await self.get_token_info(mint_address)
-        # Use normalized mint from token_info if available
-        actual_mint = token_info.get("mint", self._normalize_address(mint_address)) if token_info else self._normalize_address(mint_address)
-        total_supply = token_info["supply"] if token_info else 0
+        if token_info and isinstance(token_info, dict):
+            actual_mint = token_info.get("mint", self._normalize_address(mint_address))
+            try:
+                total_supply = int(token_info.get("supply") or 0)
+            except Exception:
+                total_supply = 0
+        else:
+            # Fallback: resolve mint from DexScreener even if RPC mint parsing failed
+            actual_mint = self._normalize_address(mint_address)
+            total_supply = 0
+            try:
+                dex_pair = await self._fetch_dex_data(mint_address)
+                resolved_mint = dex_pair.get("baseToken", {}).get("address") if dex_pair else None
+                if resolved_mint and len(resolved_mint) in [43, 44]:
+                    actual_mint = resolved_mint
+            except Exception:
+                pass
 
         async with httpx.AsyncClient() as client:
             payload = {
@@ -251,26 +265,53 @@ class SolanaScraper:
             if not accounts:
                 return None
 
+            if total_supply <= 0:
+                supply_payload = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTokenSupply",
+                    "params": [actual_mint],
+                }
+                for _ in range(3):
+                    try:
+                        current_rpc = self._get_rpc_url()
+                        supply_resp = await client.post(current_rpc, json=supply_payload, timeout=10)
+                        supply_resp.raise_for_status()
+                        supply_data = supply_resp.json()
+                        supply_val = (supply_data.get("result") or {}).get("value") or {}
+                        supply_amount = supply_val.get("amount")
+                        if supply_amount is not None:
+                            total_supply = int(supply_amount)
+                        break
+                    except Exception:
+                        continue
+
             holders = []
             for acc in accounts[:top_n]:
                 amount = int(acc.get("amount", 0))
-                pct = (amount / total_supply * 100) if total_supply > 0 else 0
+                pct = (amount / total_supply * 100) if total_supply > 0 else None
                 holders.append({
                     "address": acc.get("address", ""),
                     "amount": amount,
-                    "percentage": round(pct, 2),
+                    "percentage": round(pct, 2) if pct is not None else None,
                 })
 
-            top10_pct = sum(h["percentage"] for h in holders[:10])
-            top20_pct = sum(h["percentage"] for h in holders[:20])
+            if total_supply > 0:
+                top10_pct = sum(h["percentage"] for h in holders[:10] if isinstance(h.get("percentage"), (int, float)))
+                top20_pct = sum(h["percentage"] for h in holders[:20] if isinstance(h.get("percentage"), (int, float)))
+                largest_holder_pct = holders[0]["percentage"] if holders else 0
+            else:
+                top10_pct = None
+                top20_pct = None
+                largest_holder_pct = None
 
             return {
                 "total_holders": None,
-                "top10_pct": round(top10_pct, 2),
-                "top20_pct": round(top20_pct, 2),
-                "largest_holder_pct": holders[0]["percentage"] if holders else 0,
+                "top10_pct": round(top10_pct, 2) if isinstance(top10_pct, (int, float)) else None,
+                "top20_pct": round(top20_pct, 2) if isinstance(top20_pct, (int, float)) else None,
+                "largest_holder_pct": largest_holder_pct,
                 "holders": holders,
-                "concentration_risk": "high" if (holders[0]["percentage"] if holders else 0) > 20 else "medium" if top10_pct > 40 else "low",
+                "concentration_risk": "unknown" if total_supply <= 0 else "high" if (largest_holder_pct or 0) > 20 else "medium" if (top10_pct or 0) > 40 else "low",
             }
 
 

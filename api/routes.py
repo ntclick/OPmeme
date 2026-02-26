@@ -356,7 +356,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         dex_data = {}
         token_info = {}
         holder_data = {}
-        token_age_hours = 0
+        token_age_hours = None
+        birdeye_used = False
         
         if contract_address:
             # 1. DexScreener (Universal - works for all chains)
@@ -386,8 +387,11 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                                 base_token = dex_data.get("baseToken", {})
                                 if base_token.get("symbol"):
                                     ticker = base_token["symbol"].upper()
-                                logger.info(f"✅ DexScreener: Liq=${_safe_get(dex_data, 'liquidity', 'usd') or 0:,.0f}, "
-                                           f"Age={token_age_hours:.1f}h")
+                                age_str = f"{token_age_hours:.1f}h" if token_age_hours is not None else "unknown"
+                                logger.info(
+                                    f"✅ DexScreener: Liq=${_safe_get(dex_data, 'liquidity', 'usd') or 0:,.0f}, "
+                                    f"Age={age_str}"
+                                )
             except Exception as e:
                 logger.warning(f"⚠️ DexScreener failed: {e}")
             
@@ -414,6 +418,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     if raw:
                         birdeye_data = birdeye_client.extract_scores_from_overview(raw)
                         birdeye_data["raw"] = raw
+                        birdeye_used = True
                         if isinstance(holder_data, dict) and birdeye_data.get("holder_count") and not holder_data.get("total_holders"):
                             holder_data["total_holders"] = birdeye_data.get("holder_count")
                         mc = birdeye_data.get('market_cap') or 0
@@ -422,6 +427,15 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                         logger.info(f"✅ Birdeye: MC=${mc:,.0f}, Holders={holders:,}, Vol=${vol:,.0f}")
                 except Exception as e:
                     logger.warning(f"⚠️ Birdeye failed: {e}")
+
+                # Fallback: token age from token_info (it also contains DexScreener pairCreatedAt)
+                if token_age_hours is None and isinstance(token_info, dict):
+                    created2 = token_info.get("pairCreatedAt")
+                    if created2:
+                        try:
+                            token_age_hours = (time.time() * 1000 - float(created2)) / (1000 * 3600)
+                        except Exception:
+                            pass
                     
             elif chain_type == "evm":
                 # EVM-specific data
@@ -436,18 +450,20 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 except Exception as e:
                     logger.warning(f"⚠️ EVM scraper failed: {e}")
         
-        # Use DexScreener-derived market fields as fallback only for EVM chains.
-        # For Solana we keep Birdeye empty when Birdeye is unavailable so the source is explicit.
-        if chain_type == "evm" and not birdeye_data and dex_data:
-            # Extract what we can from DexScreener
+        # Fallback market fields from DexScreener when Birdeye is unavailable.
+        # This improves scoring for tokens where Birdeye is down / rate-limited.
+        if not birdeye_used and dex_data:
             birdeye_data = {
                 "market_cap": dex_data.get("marketCap", 0) or dex_data.get("fdv", 0),
-                "volume_24h": dex_data.get("volume", {}).get("h24", 0),
+                "volume_24h": _safe_get(dex_data, "volume", "h24") or 0,
                 "liquidity": _safe_get(dex_data, "liquidity", "usd") or 0,
-                "holder_count": 0,  # Not available from DexScreener
+                "holder_count": 0,
+                "price_change_1h": _safe_get(dex_data, "priceChange", "h1") or 0,
                 "price_change_24h": _safe_get(dex_data, "priceChange", "h24") or 0,
+                "buys_24h": _safe_get(dex_data, "txns", "h24", "buys") or 0,
+                "sells_24h": _safe_get(dex_data, "txns", "h24", "sells") or 0,
             }
-            logger.info(f"📊 Using DexScreener data: MC=${birdeye_data.get('market_cap', 0):,.0f}")
+            logger.info(f"📊 Using DexScreener fallback market data for scoring: MC=${birdeye_data.get('market_cap', 0):,.0f}")
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 2: Calculate Component Scores
@@ -477,12 +493,14 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         holder_count = birdeye_data.get("holder_count") or holder_data.get("total_holders") or 0
         holder_score = _calc_holder_score(holder_count)
         security_result = _calc_security_score(token_info, token_age_hours)
-        top10_pct = holder_data.get("top10_pct") or 50
-        whale_score = _calc_whale_score(top10_pct)
+        raw_top10 = holder_data.get("top10_pct") if isinstance(holder_data, dict) else None
+        top10_pct = float(raw_top10) if isinstance(raw_top10, (int, float)) else None
+        whale_score = _calc_whale_score(top10_pct) if top10_pct is not None else 50
         
         logger.info(f"   Holder: {holder_score}/100 ({holder_count:,})")
         logger.info(f"   Security: {security_result['security_score']}/100")
-        logger.info(f"   Whale: {whale_score}/100 (top10={top10_pct:.1f}%)")
+        top10_str = f"{top10_pct:.1f}%" if isinstance(top10_pct, (int, float)) else "unknown"
+        logger.info(f"   Whale: {whale_score}/100 (top10={top10_str})")
 
         # ══════════════════════════════════════════════════════════════════════
         # STEP 3: Calculate Overall Score (65/35/0)
@@ -594,21 +612,16 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "volume_24h": volume_24h,
             "holders": holder_count,
             "price_change_1h": price_changes.get("1h"),
-            "price_change_6h": price_changes.get("6h"),
             "price_change_24h": price_changes.get("24h"),
             "buy_volume_pct": volume_result.get("buy_volume_pct"),
             "buy_sell_ratio": buy_sell_ratio,
-            "token_age_hours": round(token_age_hours, 2),
+            "token_age_hours": round(token_age_hours, 2) if token_age_hours is not None else None,
             "token": {
                 "name": token_name,
                 "symbol": token_symbol,
+                "address": contract_address,
                 "logo": token_logo,
                 "links": token_links,
-            },
-            "dexscreener": {
-                "url": dex_url,
-                "pair_address": dex_pair_address,
-                "chain_id": dex_chain_id,
                 "dex_id": dex_data.get("dexId"),
             },
             "chart_url": chart_url,
@@ -773,7 +786,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             momentum_score=momentum_result.get("momentum_score"),
             volume_score=volume_result.get("volume_score"),
             liquidity_score=liquidity_result.get("liquidity_score"),
-            ai_trust_score=None,
+            ai_trust_score=ai_trust_score if ai_inference_success and ai_trust_score is not None else None,
         )
         
         tech_total_100 = round((overall["tech_total"] / 0.65) if overall.get("tech_total") is not None else 0, 1)
@@ -785,13 +798,13 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 "weight": "65%",
                 "contribution": round(overall["tech_total"], 1),
                 "components": {
-                    "momentum": {"score": momentum_result.get("momentum_score", 50), "weight": "25%", 
+                    "momentum": {"score": momentum_result.get("momentum_score", 50), "weight": "20%", 
                                 "trend": momentum_result.get("trend"), "details": momentum_result.get("details", [])},
-                    "volume": {"score": volume_result.get("volume_score", 50), "weight": "18%",
+                    "volume": {"score": volume_result.get("volume_score", 50), "weight": "15%",
                               "buy_pct": volume_result.get("buy_volume_pct", 50), "details": volume_result.get("details", [])},
-                    "trade_pressure": {"score": trade_result.get("trade_pressure_score", 50), "weight": "12%",
+                    "trade_pressure": {"score": trade_result.get("trade_pressure_score", 50), "weight": "10%",
                                        "buy_sell_ratio": trade_result.get("buy_sell_ratio", 1.0), "details": trade_result.get("details", [])},
-                    "liquidity": {"score": liquidity_result.get("liquidity_score", 50), "weight": "10%",
+                    "liquidity": {"score": liquidity_result.get("liquidity_score", 50), "weight": "20%",
                                  "liquidity_usd": liq_usd, "details": liquidity_result.get("details", [])}
                 }
             },
@@ -800,11 +813,11 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 "weight": "35%",
                 "contribution": round(overall["onchain_total"], 1),
                 "components": {
-                    "holder": {"score": holder_score, "weight": "15%", "holder_count": holder_count},
-                    "security": {"score": security_result.get("security_score", 50), "weight": "12%",
+                    "holder": {"score": holder_score, "weight": "12%", "holder_count": holder_count},
+                    "security": {"score": security_result.get("security_score", 50), "weight": "13%",
                                 "mint_renounced": token_info.get("is_mint_renounced", False),
-                                "token_age_hours": round(token_age_hours, 1)},
-                    "whale_risk": {"score": whale_score, "weight": "8%", "top10_pct": top10_pct}
+                                "token_age_hours": round(token_age_hours, 1) if token_age_hours is not None else None},
+                    "whale_risk": {"score": whale_score, "weight": "10%", "top10_pct": top10_pct}
                 }
             },
             "social": {
@@ -817,7 +830,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         
         data_sources = {
             "chain": chain_type,
-            "birdeye": {"used": bool(birdeye_data), "holder_count": birdeye_data.get("holder_count"),
+            "birdeye": {"used": bool(birdeye_used), "holder_count": birdeye_data.get("holder_count"),
                        "volume_24h": birdeye_data.get("volume_24h")},
             "dexscreener": {"used": bool(dex_data), "liquidity_usd": _safe_get(dex_data, "liquidity", "usd")},
             "solana_rpc": {"used": bool(token_info) and chain_type == "solana"},
@@ -829,7 +842,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "ticker": ticker,
             "contract_address": contract_address,
             "overall_score": score,
-            "trust_score": ai_trust_score if ai_inference_success and ai_trust_score is not None else score,
+            "trust_score": score,
             "risk_level": overall["risk"],
             "scores": scores,
             "breakdown": breakdown,
@@ -959,7 +972,7 @@ def _calc_holder_score(count: int) -> int:
     return 5
 
 
-def _calc_security_score(info: dict, age_hours: float) -> dict:
+def _calc_security_score(info: dict, age_hours: float | None) -> dict:
     """Security score (12% weight)."""
     if not info:
         return {"security_score": 50}
@@ -971,20 +984,32 @@ def _calc_security_score(info: dict, age_hours: float) -> dict:
     freeze = 100 if info.get("freeze_authority") is None else 20
     
     # Age (35%)
-    if age_hours >= 2160: age = 100
-    elif age_hours >= 720: age = 85
-    elif age_hours >= 336: age = 70
-    elif age_hours >= 168: age = 55
-    elif age_hours >= 72: age = 40
-    elif age_hours >= 24: age = 25
-    else: age = 10
+    if age_hours is None:
+        age = 55
+    elif age_hours >= 2160:
+        age = 100
+    elif age_hours >= 720:
+        age = 85
+    elif age_hours >= 336:
+        age = 70
+    elif age_hours >= 168:
+        age = 55
+    elif age_hours >= 72:
+        age = 40
+    elif age_hours >= 24:
+        age = 25
+    else:
+        age = 10
     
     return {"security_score": int(mint * 0.40 + freeze * 0.25 + age * 0.35)}
 
 
-def _calc_whale_score(top10: float) -> int:
+def _calc_whale_score(top10: float | None) -> int:
     """Whale risk score (8% weight)."""
-    if not top10: return 50
+    if top10 is None:
+        return 50
+    if top10 <= 0:
+        return 50
     if top10 < 20: return 100
     if top10 <= 30: return 85
     if top10 <= 40: return 70
@@ -998,16 +1023,16 @@ def _calc_whale_score(top10: float) -> int:
 def _calc_overall_v31(
     momentum: int, volume: int, trade: int, liquidity: int,
     holder: int, security: int, whale: int,
-    token_info: dict, holder_data: dict, liq_usd: float, age_hours: float, holder_count: int
+    token_info: dict, holder_data: dict, liq_usd: float, age_hours: float | None, holder_count: int
 ) -> dict:
     """
     Overall score v3.1: Technical 65% / On-Chain 35% / Social 0%
     """
     # Technical (65%)
-    tech = momentum * 0.25 + volume * 0.18 + trade * 0.12 + liquidity * 0.10
+    tech = momentum * 0.20 + volume * 0.15 + trade * 0.10 + liquidity * 0.20
     
     # On-Chain (35%)
-    onchain = holder * 0.15 + security * 0.12 + whale * 0.08
+    onchain = holder * 0.12 + security * 0.13 + whale * 0.10
     
     raw = tech + onchain
     
@@ -1015,7 +1040,7 @@ def _calc_overall_v31(
     cap = 100
     overrides = []
     
-    is_established = holder_count > 10000 or age_hours > 720
+    is_established = holder_count > 10000 or (age_hours is not None and age_hours > 720)
     is_large = liq_usd > 1000000 or holder_count > 50000
     
     # Mint authority
@@ -1036,8 +1061,8 @@ def _calc_overall_v31(
                 "Mint authority is active — the team can print more tokens; max score 35/100"
             )
     
-    # Low liquidity
-    if liq_usd < 10000:
+    # Low liquidity (stronger caps)
+    if liq_usd > 0 and liq_usd < 10_000:
         if is_established:
             cap = min(cap, 50)
             overrides.append(
@@ -1048,10 +1073,24 @@ def _calc_overall_v31(
             overrides.append(
                 f"Very low liquidity (${liq_usd:,.0f}) — easy to manipulate and hard to exit; max score 30/100"
             )
+    elif liq_usd > 0 and liq_usd < 50_000:
+        cap = min(cap, 45 if is_established else 35)
+        overrides.append(
+            f"Low liquidity (${liq_usd:,.0f}) — higher slippage and exit risk; max score {cap}/100"
+        )
+    elif liq_usd > 0 and liq_usd < 100_000 and not is_established:
+        cap = min(cap, 55)
+        overrides.append(
+            f"Moderate-low liquidity (${liq_usd:,.0f}) — exit risk is still meaningful; max score 55/100"
+        )
     
-    # Whale concentration
-    top10 = holder_data.get("top10_pct", 0) or 0
-    if top10 > 80:
+    # Whale concentration (stronger caps)
+    raw_top10 = holder_data.get("top10_pct") if isinstance(holder_data, dict) else None
+    top10 = float(raw_top10) if isinstance(raw_top10, (int, float)) else None
+    raw_largest = holder_data.get("largest_holder_pct") if isinstance(holder_data, dict) else None
+    largest = float(raw_largest) if isinstance(raw_largest, (int, float)) else None
+
+    if top10 is not None and top10 > 80:
         if is_large:
             cap = min(cap, 65)
             overrides.append(
@@ -1067,6 +1106,22 @@ def _calc_overall_v31(
             overrides.append(
                 f"Top 10 wallets hold {top10:.1f}% of supply — a few wallets control the price; max score 30/100"
             )
+    elif top10 is not None and top10 > 70:
+        cap = min(cap, 55 if is_established else 40)
+        overrides.append(
+            f"Top 10 wallets hold {top10:.1f}% of supply — high concentration; max score {cap}/100"
+        )
+    elif top10 is not None and top10 > 60 and not is_large:
+        cap = min(cap, 65 if is_established else 50)
+        overrides.append(
+            f"Top 10 wallets hold {top10:.1f}% of supply — concentration risk; max score {cap}/100"
+        )
+
+    if largest is not None and largest > 25:
+        cap = min(cap, 40 if is_established else 30)
+        overrides.append(
+            f"Largest holder owns {largest:.1f}% — single-wallet dump risk; max score {cap}/100"
+        )
     
     # Low holders
     if holder_count and holder_count < 100:
@@ -1080,8 +1135,8 @@ def _calc_overall_v31(
             f"Low holder count ({holder_count}) — price can be unstable; max score 45/100"
         )
     
-    # New token
-    if age_hours < 24:
+    # New token (only if age is known)
+    if age_hours is not None and age_hours < 24:
         if holder_count > 1000:
             cap = min(cap, 55)
             overrides.append(

@@ -45,7 +45,7 @@ class LiquidityAnalyzer:
         
         # Extract values with safe defaults
         liquidity = birdeye_data.get("liquidity", 0) or 0
-        market_cap = birdeye_data.get("market_cap", 1) or 1
+        market_cap = birdeye_data.get("market_cap") or 0
         liq_change = birdeye_data.get("liquidity_change_24h", 0) or 0
         
         result["liquidity_usd"] = liquidity
@@ -86,32 +86,37 @@ class LiquidityAnalyzer:
         # ─────────────────────────────────────────────────────────────────────
         # 2. Liquidity / MCap Ratio (30% weight)
         # ─────────────────────────────────────────────────────────────────────
-        ratio = liquidity / market_cap if market_cap > 0 else 0
-        result["liquidity_mcap_ratio"] = round(ratio, 4)
-        
-        if ratio >= 0.20:
-            score_ratio = 100
-            msg_ratio = "🟢 Extremely healthy ratio"
-        elif ratio >= 0.10:
-            score_ratio = 90
-            msg_ratio = "🟢 Very healthy ratio"
-        elif ratio >= 0.05:
-            score_ratio = 75
-            msg_ratio = "🟢 Healthy ratio"
-        elif ratio >= 0.03:
-            score_ratio = 60
-            msg_ratio = "🟡 Acceptable ratio"
-        elif ratio >= 0.01:
-            score_ratio = 40
-            msg_ratio = "🟡 Low ratio - exit may be difficult"
-        elif ratio >= 0.005:
-            score_ratio = 25
-            msg_ratio = "🔴 Poor ratio - high slippage"
+        if market_cap and market_cap > 0:
+            ratio = liquidity / market_cap
+            result["liquidity_mcap_ratio"] = round(ratio, 4)
+
+            if ratio >= 0.20:
+                score_ratio = 100
+                msg_ratio = "🟢 Extremely healthy ratio"
+            elif ratio >= 0.10:
+                score_ratio = 90
+                msg_ratio = "🟢 Very healthy ratio"
+            elif ratio >= 0.05:
+                score_ratio = 75
+                msg_ratio = "🟢 Healthy ratio"
+            elif ratio >= 0.03:
+                score_ratio = 60
+                msg_ratio = "🟡 Acceptable ratio"
+            elif ratio >= 0.01:
+                score_ratio = 40
+                msg_ratio = "🟡 Low ratio - exit may be difficult"
+            elif ratio >= 0.005:
+                score_ratio = 25
+                msg_ratio = "🔴 Poor ratio - high slippage"
+            else:
+                score_ratio = 10
+                msg_ratio = "🔴 RUG RISK - can't exit large positions"
+
+            result["details"].append(f"Ratio: {msg_ratio} ({ratio*100:.2f}% of MCap)")
         else:
-            score_ratio = 10
-            msg_ratio = "🔴 RUG RISK - can't exit large positions"
-        
-        result["details"].append(f"Ratio: {msg_ratio} ({ratio*100:.2f}% of MCap)")
+            result["liquidity_mcap_ratio"] = None
+            score_ratio = 45
+            result["details"].append("Ratio: 🟡 Market cap unavailable - cannot compute Liquidity/MCap ratio")
         
         # ─────────────────────────────────────────────────────────────────────
         # 3. Liquidity Change 24h (20% weight)

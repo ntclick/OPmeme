@@ -163,6 +163,16 @@
         .suggestion-item:hover, .suggestion-item.active {
             background: rgba(0, 255, 157, 0.1);
         }
+
+        #llmModelSelect {
+            color-scheme: dark;
+            background-color: rgba(0, 0, 0, 0.65);
+            color: #ffffff;
+        }
+        #llmModelSelect option {
+            background-color: #050505;
+            color: #ffffff;
+        }
     </style>
 </head>
 
@@ -202,7 +212,7 @@
                 </span>
                 v3.1 Technical Focus
             </div>
-            <h1 class="text-5xl md:text-7xl font-bold mb-6 tracking-tight leading-tight">
+            <h1 class="text-5xl md:text-7xl font-bold mb-6 tracking-tight">
                 <span id="heroTitle1">Don't Buy </span><span id="heroTitleTrash" class="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-500">Trash</span>.
             </h1>
             <h2 class="text-3xl md:text-4xl font-semibold mb-6 text-gray-300">
@@ -241,7 +251,7 @@
             <!-- LLM Model Selector -->
             <div class="flex items-center justify-center gap-3 mt-4">
                 <span id="llmModelLabelText" class="text-xs text-gray-500 font-medium">Model:</span>
-                <select id="llmModelSelect" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-primary/60">
+                <select id="llmModelSelect" class="bg-black/60 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-primary/60">
                     <option value="CLAUDE_4_0_SONNET" selected>CLAUDE_4_0_SONNET</option>
                     <option value="CLAUDE_3_7_SONNET">CLAUDE_3_7_SONNET</option>
                     <option value="CLAUDE_3_5_HAIKU">CLAUDE_3_5_HAIKU</option>
@@ -600,6 +610,7 @@
             llmModelLabel: 'Model:',
             riskWarning: 'Not financial advice. Meme coins are high-volatility; you can lose 100%.',
             authorLabel: 'Author:',
+            chartUnavailable: 'Chart unavailable',
         },
         vi: {
             title: 'CoinCheckGo - Kiểm định Meme Coin',
@@ -660,6 +671,7 @@
             llmModelLabel: 'Mô hình:',
             riskWarning: 'Cảnh báo: Không phải lời khuyên tài chính. Meme coin biến động rất mạnh; bạn có thể mất 100% vốn.',
             authorLabel: 'Tác giả:',
+            chartUnavailable: 'Không tải được chart',
         }
     };
 
@@ -743,7 +755,7 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         applyLanguage();
-        loadTrendingTokens();
+        initTrendingAutoRefresh();
     });
 
     function resetUI() {
@@ -766,12 +778,40 @@
         analyzeToken();
     }
 
-    async function loadTrendingTokens() {
+    let _trendingLastLoadedMs = 0;
+    let _trendingTimer = null;
+    let _trendingInFlight = false;
+
+    function initTrendingAutoRefresh() {
+        loadTrendingTokens(true).catch(() => {});
+
+        if (_trendingTimer) {
+            try { clearInterval(_trendingTimer); } catch (e) {}
+        }
+
+        _trendingTimer = setInterval(() => {
+            loadTrendingTokens(false).catch(() => {});
+        }, 60 * 60 * 1000);
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) loadTrendingTokens(false).catch(() => {});
+        });
+    }
+
+    async function loadTrendingTokens(force = false) {
         const t = translations[currentLang];
         const container = document.getElementById('trendingTags');
         if (!container) return;
 
+        if (document.hidden) return;
+        if (_trendingInFlight) return;
+
+        const now = Date.now();
+        const oneHour = 60 * 60 * 1000;
+        if (!force && _trendingLastLoadedMs && (now - _trendingLastLoadedMs) < oneHour) return;
+
         try {
+            _trendingInFlight = true;
             const resp = await fetch('/api/trending/dex/solana?limit=8');
             if (!resp.ok) return;
             const data = await resp.json();
@@ -787,7 +827,11 @@
                 html += `<span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" title="${title}" onclick="setTrendingToken('${addr}')">$${symbol}</span>`;
             });
             container.innerHTML = html;
-        } catch (e) {}
+            _trendingLastLoadedMs = Date.now();
+        } catch (e) {
+        } finally {
+            _trendingInFlight = false;
+        }
     }
 
     let _chart = null;
@@ -799,36 +843,63 @@
         const container = document.getElementById('chartContainer');
         if (!chartSection || !container) return;
 
-        if (!address || address.startsWith('0x')) {
+        if (!address || address.startsWith('0x') || typeof LightweightCharts === 'undefined') {
             chartSection.classList.add('hidden');
             return;
         }
+
+        const t = translations[currentLang];
+        const showChartError = () => {
+            chartSection.classList.remove('hidden');
+            container.innerHTML = `<div class="w-full h-full flex items-center justify-center text-sm text-gray-500 font-mono">${t.chartUnavailable}</div>`;
+        };
 
         if (_chartResizeObs) {
             try { _chartResizeObs.disconnect(); } catch (e) {}
             _chartResizeObs = null;
         }
 
+        if (_chart) {
+            try { _chart.remove(); } catch (e) {}
+            _chart = null;
+            _chartSeries = null;
+        }
+
         container.innerHTML = '';
         chartSection.classList.remove('hidden');
 
-        const chart = LightweightCharts.createChart(container, {
-            layout: {
-                background: { type: 'solid', color: 'transparent' },
-                textColor: '#9ca3af',
-                fontFamily: 'Inter, sans-serif'
-            },
-            grid: {
-                vertLines: { color: 'rgba(255,255,255,0.06)' },
-                horzLines: { color: 'rgba(255,255,255,0.06)' }
-            },
-            rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
-            timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true },
-            crosshair: {
-                vertLine: { color: 'rgba(255,255,255,0.15)' },
-                horzLine: { color: 'rgba(255,255,255,0.15)' }
-            }
-        });
+        try {
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        } catch (e) {}
+
+        const width = Math.max(1, container.clientWidth || container.parentElement?.clientWidth || 600);
+        const height = Math.max(1, container.clientHeight || 420);
+
+        let chart;
+        try {
+            chart = LightweightCharts.createChart(container, {
+                width,
+                height,
+                layout: {
+                    background: { type: 'solid', color: 'transparent' },
+                    textColor: '#9ca3af',
+                    fontFamily: 'Inter, sans-serif'
+                },
+                grid: {
+                    vertLines: { color: 'rgba(255,255,255,0.06)' },
+                    horzLines: { color: 'rgba(255,255,255,0.06)' }
+                },
+                rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
+                timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true },
+                crosshair: {
+                    vertLine: { color: 'rgba(255,255,255,0.15)' },
+                    horzLine: { color: 'rgba(255,255,255,0.15)' }
+                }
+            });
+        } catch (e) {
+            showChartError();
+            return;
+        }
 
         const series = chart.addCandlestickSeries({
             upColor: '#00ff9d',
@@ -848,15 +919,34 @@
             const data = await resp.json();
             const candles = data?.candles || [];
             if (!Array.isArray(candles) || candles.length === 0) throw new Error('no_candles');
-            series.setData(candles);
+
+            const normalized = candles
+                .map(c => {
+                    const t = Number(c?.time);
+                    if (!isFinite(t)) return null;
+                    const time = t > 1_000_000_000_000 ? Math.floor(t / 1000) : Math.floor(t);
+                    const open = Number(c?.open);
+                    const high = Number(c?.high);
+                    const low = Number(c?.low);
+                    const close = Number(c?.close);
+                    if (![open, high, low, close].every(v => isFinite(v))) return null;
+                    return { time, open, high, low, close };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.time - b.time);
+
+            if (normalized.length === 0) throw new Error('no_candles');
+            series.setData(normalized);
             chart.timeScale().fitContent();
 
             _chartResizeObs = new ResizeObserver(() => {
-                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+                const w = Math.max(1, container.clientWidth);
+                const h = Math.max(1, container.clientHeight);
+                try { chart.resize(w, h); } catch (e) {}
             });
             _chartResizeObs.observe(container);
         } catch (e) {
-            chartSection.classList.add('hidden');
+            showChartError();
         }
     }
 

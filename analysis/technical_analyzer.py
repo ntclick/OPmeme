@@ -105,23 +105,30 @@ class TechnicalAnalyzer:
             
         volume_24h = birdeye_data.get("volume_24h", 0) or 0
         buy_volume = birdeye_data.get("buy_volume_24h", 0) or 0
-        market_cap = birdeye_data.get("market_cap", 1) or 1
+        market_cap = birdeye_data.get("market_cap") or 0
         vol_change = birdeye_data.get("volume_24h_change", 0) or 0
         
         result["volume_24h"] = volume_24h
         
         # Volume/MCap Ratio
-        vol_mcap_ratio = volume_24h / market_cap if market_cap > 0 else 0
-        result["volume_mcap_ratio"] = round(vol_mcap_ratio, 4)
-        
-        if vol_mcap_ratio > 1.0: score_ratio, msg_ratio = 95, "🔥 EXTREME activity (may be wash trading)"
-        elif vol_mcap_ratio >= 0.5: score_ratio, msg_ratio = 90, "🟢 Very high activity"
-        elif vol_mcap_ratio >= 0.2: score_ratio, msg_ratio = 85, "🟢 High activity"
-        elif vol_mcap_ratio >= 0.1: score_ratio, msg_ratio = 75, "🟢 Good activity"
-        elif vol_mcap_ratio >= 0.05: score_ratio, msg_ratio = 60, "🟡 Moderate activity"
-        elif vol_mcap_ratio >= 0.02: score_ratio, msg_ratio = 45, "🟡 Low activity"
-        elif vol_mcap_ratio >= 0.01: score_ratio, msg_ratio = 30, "🔴 Very low activity"
-        else: score_ratio, msg_ratio = 15, "🔴 DEAD (no trading)"
+        if market_cap and market_cap > 0:
+            vol_mcap_ratio = volume_24h / market_cap
+            result["volume_mcap_ratio"] = round(vol_mcap_ratio, 4)
+
+            # Extremely high ratio often indicates wash trading / manipulation.
+            if vol_mcap_ratio >= 5.0: score_ratio, msg_ratio = 15, "� EXTREME activity vs market cap (possible wash trading)"
+            elif vol_mcap_ratio >= 2.0: score_ratio, msg_ratio = 30, "🟡 Very high activity vs market cap (potential manipulation)"
+            elif vol_mcap_ratio > 1.0: score_ratio, msg_ratio = 45, "🟡 High activity vs market cap (monitor for wash trading)"
+            elif vol_mcap_ratio >= 0.5: score_ratio, msg_ratio = 90, "🟢 Very high activity"
+            elif vol_mcap_ratio >= 0.2: score_ratio, msg_ratio = 85, "🟢 High activity"
+            elif vol_mcap_ratio >= 0.1: score_ratio, msg_ratio = 75, "🟢 Good activity"
+            elif vol_mcap_ratio >= 0.05: score_ratio, msg_ratio = 60, "🟡 Moderate activity"
+            elif vol_mcap_ratio >= 0.02: score_ratio, msg_ratio = 45, "🟡 Low activity"
+            elif vol_mcap_ratio >= 0.01: score_ratio, msg_ratio = 30, "🔴 Very low activity"
+            else: score_ratio, msg_ratio = 15, "🔴 DEAD (no trading)"
+        else:
+            result["volume_mcap_ratio"] = None
+            score_ratio, msg_ratio = 45, "🟡 Market cap unavailable - cannot compute Volume/MCap ratio"
         
         result["details"].append(msg_ratio)
         
