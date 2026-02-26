@@ -49,24 +49,130 @@ from utils.cache import cache, CacheKeys, CacheTTL
 logger = logging.getLogger(__name__)
 
 
-def _resolve_settlement_mode(mode_enum: Any):
+def _resolve_settlement_mode(mode_enum: Any, *, require_onchain: bool = False):
     """Pick SETTLE for real on-chain tx hash (requires OPG tokens).
     
     SETTLE ("private") - Returns real on-chain tx hash (0x...) ✅
     SETTLE_BATCH ("batch") - May work, batched settlement
     SETTLE_METADATA ("individual") - Returns 'external' ❌
     """
-    # SETTLE = "private" → Real tx hash (0x...)
-    if hasattr(mode_enum, "SETTLE"):
-        return getattr(mode_enum, "SETTLE")
-    # SETTLE_BATCH = "batch" → May work too
-    if hasattr(mode_enum, "SETTLE_BATCH"):
-        return getattr(mode_enum, "SETTLE_BATCH")
-    # SETTLE_METADATA = "individual" → Returns "external" (NO real tx!)
-    # Only use as last resort
-    if hasattr(mode_enum, "SETTLE_METADATA"):
+
+    if mode_enum is None:
+        return None
+
+    if not require_onchain and hasattr(mode_enum, "SETTLE_METADATA"):
         return getattr(mode_enum, "SETTLE_METADATA")
+
+    preferred_onchain = [
+        "SETTLE",
+        "SETTLE_ONCHAIN",
+        "SETTLE_PRIVATE",
+        "SETTLE_TX",
+        "SETTLE_PAYMENT",
+        "SETTLE_BATCH",
+    ]
+    for name in preferred_onchain:
+        if hasattr(mode_enum, name):
+            return getattr(mode_enum, name)
+
+    if not require_onchain and hasattr(mode_enum, "SETTLE_METADATA"):
+        return getattr(mode_enum, "SETTLE_METADATA")
+
     return None
+
+
+def _extract_tx_hash(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    def _to_str(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, bytes):
+            try:
+                v = v.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        if isinstance(v, str):
+            s = v.strip()
+            return s or None
+        return None
+
+    candidate_names = (
+        "transaction_hash",
+        "tx_hash",
+        "txHash",
+        "transactionHash",
+        "payment_hash",
+        "paymentHash",
+        "payment_tx_hash",
+        "paymentTxHash",
+        "settlement_hash",
+        "settlementHash",
+        "settlement_tx_hash",
+        "settlementTxHash",
+        "hash",
+    )
+
+    if isinstance(value, dict):
+        for k in candidate_names:
+            s = _to_str(value.get(k))
+            if s:
+                return s
+    else:
+        for k in candidate_names:
+            try:
+                s = _to_str(getattr(value, k, None))
+            except Exception:
+                s = None
+            if s:
+                return s
+
+    seen: set[int] = set()
+
+    def _walk(v: Any, depth: int) -> Optional[str]:
+        if v is None or depth <= 0:
+            return None
+        obj_id = id(v)
+        if obj_id in seen:
+            return None
+        seen.add(obj_id)
+
+        if isinstance(v, dict):
+            for kk in candidate_names:
+                s = _to_str(v.get(kk))
+                if s:
+                    return s
+            for vv in v.values():
+                out = _walk(vv, depth - 1)
+                if out:
+                    return out
+            return None
+
+        if isinstance(v, (list, tuple, set)):
+            for vv in v:
+                out = _walk(vv, depth - 1)
+                if out:
+                    return out
+            return None
+
+        try:
+            if hasattr(v, "model_dump") and callable(getattr(v, "model_dump")):
+                dumped = v.model_dump()
+                return _walk(dumped, depth - 1)
+        except Exception:
+            pass
+
+        try:
+            d = getattr(v, "__dict__", None)
+            if isinstance(d, dict):
+                return _walk(d, depth - 1)
+        except Exception:
+            pass
+
+        return None
+
+    return _walk(value, 4)
 
 
 def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
@@ -136,7 +242,7 @@ class SafeOpenGradientLLM(BaseChatModel):
 
         # 3. Call SDK synchronously
         try:
-            settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
+            settlement_mode = _resolve_settlement_mode(og.x402SettlementMode, require_onchain=False)
             res = getattr(self.client, "llm").chat(
                 model=getattr(og.TEE_LLM, self.model_enum),
                 messages=formatted_msgs,
@@ -159,7 +265,7 @@ class SafeOpenGradientLLM(BaseChatModel):
         else:
             content = str(res.chat_output)
             
-        tx_hash = getattr(res, "transaction_hash", None)
+        tx_hash = _extract_tx_hash(res)
         
         # 4. Parse if the LLM attempted to call a tool via raw JSON
         tool_calls = []
@@ -548,7 +654,26 @@ class OpenGradientAnalyzer:
         ]
 
         model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4O)
-        settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
+        settlement_mode = _resolve_settlement_mode(
+            og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
+        )
+        if self.REQUIRE_X402_TX and settlement_mode is None:
+            err = "x402 on-chain settlement mode is required but not available in this SDK build"
+            logger.warning(f"[METHOD A STREAM] {err}")
+            yield {
+                "type": "done",
+                "result": {
+                    "ai_result": None,
+                    "tx_hash": None,
+                    "transaction_hash": None,
+                    "model_cid": selected_model,
+                    "raw_output": None,
+                    "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
+                    "used_opengradient": False,
+                    "error": err,
+                },
+            }
+            return
 
         queue: asyncio.Queue[dict] = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -583,7 +708,7 @@ class OpenGradientAnalyzer:
                     if content.startswith("__OG_META__"):
                         try:
                             meta = json.loads(content[len("__OG_META__") :])
-                            tx_hash = meta.get("tx_hash") or tx_hash
+                            tx_hash = _extract_tx_hash(meta) or tx_hash
                             payment_hash = meta.get("payment_hash") or payment_hash
                             loop.call_soon_threadsafe(
                                 queue.put_nowait,
@@ -774,7 +899,13 @@ class OpenGradientAnalyzer:
             
             # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
             # Use SETTLE mode for real tx hash
-            settlement_mode = _resolve_settlement_mode(og.x402SettlementMode)
+            settlement_mode = _resolve_settlement_mode(
+                og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
+            )
+            if self.REQUIRE_X402_TX and settlement_mode is None:
+                raise RuntimeError(
+                    "x402 on-chain settlement mode is required but not available in this SDK build"
+                )
             
             completion = self._client.llm.chat(
                 model=model_cid,
@@ -785,7 +916,7 @@ class OpenGradientAnalyzer:
             )
             
             # Extract from completion object
-            tx_hash = getattr(completion, 'transaction_hash', None)
+            tx_hash = _extract_tx_hash(completion)
             finish_reason = getattr(completion, 'finish_reason', None)
             chat_output = getattr(completion, 'chat_output', None)
             
