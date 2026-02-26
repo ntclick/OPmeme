@@ -391,7 +391,7 @@ class OpenGradientAnalyzer:
                 # Use client.llm.ensure_opg_approval directly (preferred method)
                 try:
                     logger.info("🔍 Checking OPG approval via client.llm...")
-                    approval = self._client.llm.ensure_opg_approval(opg_amount=5.0)
+                    approval = self._client.llm.ensure_opg_approval(opg_amount=420.0)
                     if approval.tx_hash:
                         logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
                     else:
@@ -674,7 +674,7 @@ class OpenGradientAnalyzer:
             }
             return
 
-        if self.REQUIRE_X402_TX and tx_hash and not _has_real_tx_hash(tx_hash):
+        if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
             err = f"x402 tx hash required but got: {tx_hash}"
             logger.warning(f"[METHOD A STREAM] {err}")
             yield {
@@ -691,11 +691,6 @@ class OpenGradientAnalyzer:
                 },
             }
             return
-
-        if self.REQUIRE_X402_TX and not tx_hash:
-            logger.warning(
-                "[METHOD A STREAM] Missing x402 tx hash (tx_hash=None). Continuing with AI output but verification will be unavailable."
-            )
 
         ai_result = self._parse_ai_output(raw_output, token_type, algo_score)
         required_fields = ["ai_trust_score", "ai_sentiment_score", "verdict", "red_flags", "green_flags"]
@@ -834,8 +829,8 @@ class OpenGradientAnalyzer:
             # Log what we got for debugging
             logger.info(f"🔍 [METHOD A] Got TX: {tx_hash} (type: {type(tx_hash)})")
             logger.info(f"🔍 [METHOD A] Settlement mode used: {settlement_mode}")
-            
-            if self.REQUIRE_X402_TX and tx_hash and tx_hash != "external" and not _has_real_tx_hash(tx_hash):
+
+            if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
                 raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
             
             logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}, finish: {finish_reason}")
@@ -867,10 +862,32 @@ class OpenGradientAnalyzer:
                 
         except Exception as e:
             logger.warning(f"[METHOD A] Failed: {e}, trying fallback...")
+            if self.REQUIRE_X402_TX:
+                return {
+                    "ai_result": None,
+                    "tx_hash": None,
+                    "transaction_hash": None,
+                    "model_cid": None,
+                    "raw_output": None,
+                    "model_used": None,
+                    "used_opengradient": False,
+                    "error": str(e),
+                }
 
         # ════════════════════════════════════════════════════════════════════════
         # METHOD B: LangChain ReAct Agent - Fallback approach
         # ════════════════════════════════════════════════════════════════════════
+        if self.REQUIRE_X402_TX:
+            return {
+                "ai_result": None,
+                "tx_hash": None,
+                "transaction_hash": None,
+                "model_cid": None,
+                "raw_output": None,
+                "model_used": None,
+                "used_opengradient": False,
+                "error": "x402 settlement is required but no verifiable tx_hash was produced",
+            }
         try:
             logger.info(f"🤖 [METHOD B] Falling back to LangChain ReAct Agent...")
             

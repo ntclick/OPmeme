@@ -169,12 +169,20 @@ class SolanaScraper:
         if not account_data:
             return None
 
-        parsed = (
-            account_data
-            .get("data", {})
-            .get("parsed", {})
-            .get("info", {})
-        )
+        raw_data = account_data.get("data")
+        if not isinstance(raw_data, dict):
+            return None
+
+        parsed_root = raw_data.get("parsed")
+        if not isinstance(parsed_root, dict):
+            return None
+
+        if parsed_root.get("type") != "mint":
+            return None
+
+        parsed = parsed_root.get("info") or {}
+        if not isinstance(parsed, dict):
+            return None
         
         # Extract DexScreener data
         market_cap = 0

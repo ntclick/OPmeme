@@ -330,6 +330,20 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         cache_key = CacheKeys.full_analysis(contract_address or ticker, effective_model)
         cached = await cache.get(cache_key)
         if cached:
+            require_x402 = bool(getattr(opengradient_analyzer, "REQUIRE_X402_TX", False))
+            if require_x402 and not cached.get("tx_hash"):
+                cached = None
+        if cached:
+            if chain_type == "solana":
+                try:
+                    token_info_check = await solana_scraper.get_token_info(contract_address)
+                except Exception:
+                    token_info_check = None
+                if not token_info_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Only token contract (mint) addresses are supported. Wallet addresses cannot be analyzed.",
+                    )
             cached["cached"] = True
             logger.info(f"✅ Cache hit for {ticker}")
             return AnalyzeResponse(**cached)
@@ -349,9 +363,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         logger.info(f"🗑️ Cache cleared for {ticker} (model={effective_model})")
 
     try:
-        # Ensure coin in DB
-        coin = crud.get_or_create_coin(db, ticker, contract_address)
-
         # ══════════════════════════════════════════════════════════════════════
         # STEP 1: Fetch Data from APIs (Chain-specific)
         # ══════════════════════════════════════════════════════════════════════
@@ -468,16 +479,27 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 # Solana RPC FIRST - to resolve the mint address (Birdeye needs Base58)
                 logger.info(f"� Fetching Solana RPC for: {contract_address}")
                 try:
-                    token_info = await solana_scraper.get_token_info(contract_address) or {}
-                    holder_data = await solana_scraper.get_top_holders(contract_address) or {}
+                    token_info = await solana_scraper.get_token_info(contract_address)
+                    if not token_info:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Only token contract (mint) addresses are supported. Wallet addresses cannot be analyzed.",
+                        )
                     # Resolve mint address - Birdeye requires Base58 format
                     resolved_mint = token_info.get("mint")
                     if resolved_mint and resolved_mint != contract_address:
                         logger.info(f"🔧 Solana RPC resolved mint: {contract_address[:8]}... → {resolved_mint[:8]}...")
                         contract_address = resolved_mint
+                    holder_data = await solana_scraper.get_top_holders(contract_address) or {}
                     logger.info(f"✅ Solana RPC: mint_renounced={token_info.get('is_mint_renounced')}")
+                except HTTPException:
+                    raise
                 except Exception as e:
                     logger.warning(f"⚠️ Solana RPC failed: {e}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Solana RPC validation failed. Unable to confirm this is a token mint address.",
+                    )
                 
                 # Birdeye (Solana only) - AFTER address is resolved
                 logger.info(f"� Fetching Birdeye for address: {contract_address}")
@@ -511,11 +533,20 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 try:
                     # Detect specific EVM chain from DexScreener data
                     chain_id = dex_data.get("chainId", "base") if dex_data else "base"
-                    token_info = await evm_scraper.get_token_info(contract_address, chain_id) or {}
-                    token_info["chain"] = chain_id
-                    token_info["is_evm"] = True
+                    token_info = await evm_scraper.get_token_info(contract_address, chain_id)
+                    if token_info:
+                        token_info["chain"] = chain_id
+                        token_info["is_evm"] = True
+                    if not token_info and not dex_data:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Only token contract addresses are supported. Wallet addresses cannot be analyzed.",
+                        )
                     logger.info(f"✅ EVM data: chain={chain_id}")
+                except HTTPException:
+                    raise
                 except Exception as e:
+                    token_info = {}
                     logger.warning(f"⚠️ EVM scraper failed: {e}")
         
         # Fallback market fields from DexScreener when Birdeye is unavailable.
@@ -799,6 +830,13 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             else:
                 logger.warning("⚠️ AI returned default fallback - ignoring")
 
+        require_x402 = bool(getattr(opengradient_analyzer, "REQUIRE_X402_TX", False))
+        if require_x402 and not ai_inference_success:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenGradient x402 verification is required but no verifiable tx_hash was produced. {ai_error or ''}".strip(),
+            )
+
         # Always get the algorithmic score first
         score = overall["score"]
         
@@ -842,6 +880,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # ══════════════════════════════════════════════════════════════════════
         
         duration_ms = int((time.time() - start_time) * 1000)
+
+        coin = crud.get_or_create_coin(db, ticker, contract_address)
         
         report = AnalysisReport(
             coin_id=coin.id,
