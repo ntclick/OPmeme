@@ -469,25 +469,11 @@ class OpenGradientAnalyzer:
         scoring_result: dict,
         llm_model: Optional[str] = None,
     ) -> dict:
-        """
-        Run verifiable AI inference on OpenGradient.
-        
-        Steps:
-        1. Check cache for existing AI verdict
-        2. Run OpenGradient TEE inference if not cached
-        3. Cache result for 30 minutes
-        """
-        # Check cache first
+        """Run verifiable AI inference on OpenGradient."""
         requested_model = _normalize_llm_model_enum(llm_model)
         selected_model = self._selected_model
         if requested_model:
             selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
-
-        cache_key = CacheKeys.ai_verdict(ticker, selected_model)
-        cached_result = await cache.get(cache_key)
-        if cached_result:
-            logger.info(f"AI verdict cache HIT for {ticker}")
-            return cached_result
         
         # Run Inference
         result = await self._run_inference(
@@ -497,11 +483,6 @@ class OpenGradientAnalyzer:
             scoring_result,
             llm_model=selected_model,
         )
-
-        # Cache successful result
-        if result.get("ai_result"):
-            await cache.set(cache_key, result, CacheTTL.AI_VERDICT)
-            logger.info(f"AI verdict cached for {ticker} (TTL: {CacheTTL.AI_VERDICT}s)")
 
         return result
 
@@ -517,13 +498,6 @@ class OpenGradientAnalyzer:
         selected_model = self._selected_model
         if requested_model:
             selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
-
-        cache_key = CacheKeys.ai_verdict(ticker, selected_model)
-        cached_result = await cache.get(cache_key)
-        if cached_result:
-            logger.info(f"AI verdict cache HIT for {ticker}")
-            yield {"type": "done", "result": cached_result}
-            return
 
         input_text = self._prepare_input(ticker, tweets_summary, on_chain_data, scoring_result)
         algo_score = scoring_result.get("overall_score", 50)
@@ -721,10 +695,6 @@ class OpenGradientAnalyzer:
             "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
             "used_opengradient": True,
         }
-
-        if result.get("ai_result"):
-            await cache.set(cache_key, result, CacheTTL.AI_VERDICT)
-            logger.info(f"AI verdict cached for {ticker} (TTL: {CacheTTL.AI_VERDICT}s)")
 
         yield {"type": "done", "result": result}
 

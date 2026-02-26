@@ -103,6 +103,10 @@ class CacheKeys:
     @staticmethod
     def holder_data(mint: str) -> str:
         return f"holders:{mint}"
+
+    @staticmethod
+    def birdeye_overview(mint: str) -> str:
+        return f"birdeye:overview:{mint}"
     
     @staticmethod
     def price_history(mint: str, interval: str) -> str:
@@ -162,6 +166,8 @@ class CacheTTL:
     HOLDER_DATA = 120       # 2 minutes
     TRADE_DATA = 120        # 2 minutes
     PRICE_HISTORY = 300     # 5 minutes
+
+    BIRDEYE_OVERVIEW = 300  # 5 minutes
     
     # Slow-changing data
     TOKEN_INFO = 600        # 10 minutes

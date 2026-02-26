@@ -325,43 +325,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
     if not contract_address:
         raise HTTPException(status_code=400, detail="Unable to resolve contract address")
 
-    # Check cache
-    if not force_refresh:
-        cache_key = CacheKeys.full_analysis(contract_address or ticker, effective_model)
-        cached = await cache.get(cache_key)
-        if cached:
-            require_x402 = bool(getattr(opengradient_analyzer, "REQUIRE_X402_TX", False))
-            if require_x402 and not cached.get("tx_hash"):
-                cached = None
-        if cached:
-            if chain_type == "solana":
-                try:
-                    token_info_check = await solana_scraper.get_token_info(contract_address)
-                except Exception:
-                    token_info_check = None
-                if not token_info_check:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Only token contract (mint) addresses are supported. Wallet addresses cannot be analyzed.",
-                    )
-            cached["cached"] = True
-            logger.info(f"✅ Cache hit for {ticker}")
-            return AnalyzeResponse(**cached)
-    else:
-        # Clear AI verdict cache when force refresh
-        keys_to_clear = [
-            CacheKeys.ai_verdict(ticker),
-            CacheKeys.ai_verdict(ticker, effective_model),
-            CacheKeys.full_analysis(contract_address or ticker),
-            CacheKeys.full_analysis(contract_address or ticker, effective_model),
-        ]
-        for k in keys_to_clear:
-            try:
-                await cache.delete(k)
-            except Exception:
-                pass
-        logger.info(f"🗑️ Cache cleared for {ticker} (model={effective_model})")
-
     try:
         # ══════════════════════════════════════════════════════════════════════
         # STEP 1: Fetch Data from APIs (Chain-specific)
@@ -504,7 +467,14 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 # Birdeye (Solana only) - AFTER address is resolved
                 logger.info(f"� Fetching Birdeye for address: {contract_address}")
                 try:
-                    raw = await birdeye_client.get_token_overview(contract_address)
+                    cache_key = CacheKeys.birdeye_overview(contract_address)
+                    raw = None
+                    if not force_refresh:
+                        raw = await cache.get(cache_key)
+                    if not raw:
+                        raw = await birdeye_client.get_token_overview(contract_address)
+                        if raw:
+                            await cache.set(cache_key, raw, CacheTTL.BIRDEYE_OVERVIEW)
                     if raw:
                         birdeye_data = birdeye_client.extract_scores_from_overview(raw)
                         birdeye_data["raw"] = raw
@@ -1006,9 +976,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             ],
             "data_sources": data_sources,
         }
-        
-        # Cache
-        await cache.set(CacheKeys.full_analysis(contract_address or ticker, effective_model), response, CacheTTL.FULL_ANALYSIS)
         
         logger.info(f"✅ Done {ticker} in {duration_ms}ms | score={score} risk={overall['risk']}")
         
