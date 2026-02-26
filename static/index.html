@@ -9,6 +9,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -240,9 +241,6 @@
             <!-- Trending tags below search -->
             <div class="flex flex-wrap items-center justify-center gap-2 mt-6 text-sm" id="trendingTags">
                 <span id="trendingLabelText" class="text-gray-500 font-medium mr-2">Trending:</span>
-                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" onclick="setTicker('BONK')">$BONK</span>
-                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" onclick="setTicker('WIF')">$WIF</span>
-                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" onclick="setTicker('POPCAT')">$POPCAT</span>
             </div>
         </div>
 
@@ -346,7 +344,7 @@
                         
                         <div id="chartSection" class="hidden mb-6">
                             <div class="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                                <iframe id="chartFrame" src="" class="w-full" style="height: 420px;" loading="lazy" referrerpolicy="no-referrer"></iframe>
+                                <div id="chartContainer" class="w-full" style="height: 420px;"></div>
                             </div>
                         </div>
                         <!-- OpenGradient Verification Badge -->
@@ -692,6 +690,7 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         applyLanguage();
+        loadTrendingTokens();
     });
 
     function resetUI() {
@@ -707,6 +706,105 @@
     function setTicker(symbol) {
         // Resolve token symbol to contract address first
         searchAndSetTicker(symbol);
+    }
+
+    function setTrendingToken(address) {
+        document.getElementById('tickerInput').value = address;
+        analyzeToken();
+    }
+
+    async function loadTrendingTokens() {
+        const t = translations[currentLang];
+        const container = document.getElementById('trendingTags');
+        if (!container) return;
+
+        try {
+            const resp = await fetch('/api/trending/dex/solana?limit=8');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const items = data?.trending || [];
+            if (!Array.isArray(items) || items.length === 0) return;
+
+            let html = `<span id="trendingLabelText" class="text-gray-500 font-medium mr-2">${t.trendingLabel}</span>`;
+            items.forEach(it => {
+                const symbol = (it.symbol || '').toUpperCase();
+                const addr = it.address;
+                if (!symbol || !addr) return;
+                const title = it.name ? `${it.name} (${symbol})` : symbol;
+                html += `<span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:border-primary/50 cursor-pointer transition" title="${title}" onclick="setTrendingToken('${addr}')">$${symbol}</span>`;
+            });
+            container.innerHTML = html;
+        } catch (e) {}
+    }
+
+    let _chart = null;
+    let _chartSeries = null;
+    let _chartResizeObs = null;
+
+    async function renderChartOnly(address) {
+        const chartSection = document.getElementById('chartSection');
+        const container = document.getElementById('chartContainer');
+        if (!chartSection || !container) return;
+
+        if (!address || address.startsWith('0x')) {
+            chartSection.classList.add('hidden');
+            return;
+        }
+
+        if (_chartResizeObs) {
+            try { _chartResizeObs.disconnect(); } catch (e) {}
+            _chartResizeObs = null;
+        }
+
+        container.innerHTML = '';
+        chartSection.classList.remove('hidden');
+
+        const chart = LightweightCharts.createChart(container, {
+            layout: {
+                background: { type: 'solid', color: 'transparent' },
+                textColor: '#9ca3af',
+                fontFamily: 'Inter, sans-serif'
+            },
+            grid: {
+                vertLines: { color: 'rgba(255,255,255,0.06)' },
+                horzLines: { color: 'rgba(255,255,255,0.06)' }
+            },
+            rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
+            timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true },
+            crosshair: {
+                vertLine: { color: 'rgba(255,255,255,0.15)' },
+                horzLine: { color: 'rgba(255,255,255,0.15)' }
+            }
+        });
+
+        const series = chart.addCandlestickSeries({
+            upColor: '#00ff9d',
+            downColor: '#ef4444',
+            wickUpColor: '#00ff9d',
+            wickDownColor: '#ef4444',
+            borderUpColor: '#00ff9d',
+            borderDownColor: '#ef4444'
+        });
+
+        _chart = chart;
+        _chartSeries = series;
+
+        try {
+            const resp = await fetch(`/api/ohlcv?address=${encodeURIComponent(address)}&interval=15m&limit=200`);
+            if (!resp.ok) throw new Error('ohlcv');
+            const data = await resp.json();
+            const candles = data?.candles || [];
+            if (!Array.isArray(candles) || candles.length === 0) throw new Error('no_candles');
+            series.setData(candles);
+            chart.timeScale().fitContent();
+
+            _chartResizeObs = new ResizeObserver(() => {
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+            });
+            _chartResizeObs.observe(container);
+        } catch (e) {
+            chartSection.classList.add('hidden');
+        }
     }
 
     async function searchAndSetTicker(symbol) {
@@ -1063,19 +1161,11 @@
         if (tokenNameEl) tokenNameEl.innerText = tokenMeta.name ? tokenMeta.name : '';
 
         const chartSection = document.getElementById('chartSection');
-        const chartFrame = document.getElementById('chartFrame');
-        let chartUrl = market.chart_url;
-        if (!chartUrl && market.dexscreener && market.dexscreener.url) {
-            const base = market.dexscreener.url;
-            const sep = base.includes('?') ? '&' : '?';
-            chartUrl = `${base}${sep}embed=1&theme=dark`;
-        }
-        if (chartSection && chartFrame) {
-            if (chartUrl) {
-                chartFrame.src = chartUrl;
-                chartSection.classList.remove('hidden');
+        if (chartSection) {
+            const chartAddress = data.contract_address || tokenMeta.address || market.contract_address;
+            if (chartAddress) {
+                renderChartOnly(chartAddress).catch(() => {});
             } else {
-                chartFrame.src = '';
                 chartSection.classList.add('hidden');
             }
         }

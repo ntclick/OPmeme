@@ -102,6 +102,121 @@ async def proxy_dex_search(q: str):
             raise HTTPException(status_code=502, detail="Failed to search")
 
 
+@router.get("/api/trending/dex/solana")
+async def get_trending_dex_solana(limit: int = 8):
+    cache_key = "trending:dex:solana"
+    cached = await cache.get(cache_key)
+    if cached:
+        return cached
+
+    limit = max(1, min(int(limit or 8), 20))
+
+    boosts_url = "https://api.dexscreener.com/token-boosts/top/v1"
+    try:
+        async with httpx.AsyncClient() as client:
+            boosts_resp = await client.get(boosts_url, timeout=10.0)
+            boosts_resp.raise_for_status()
+            boosts = boosts_resp.json()
+    except Exception as e:
+        logger.error(f"DexScreener trending boosts failed: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch DexScreener trending")
+
+    sol = [b for b in boosts if isinstance(b, dict) and b.get("chainId") == "solana" and b.get("tokenAddress")]
+    sol = sol[:limit]
+    addresses = [b.get("tokenAddress") for b in sol]
+
+    tokens_url = f"https://api.dexscreener.com/latest/dex/tokens/{','.join(addresses)}"
+    try:
+        async with httpx.AsyncClient() as client:
+            tokens_resp = await client.get(tokens_url, timeout=10.0)
+            tokens_resp.raise_for_status()
+            pairs = tokens_resp.json().get("pairs", [])
+    except Exception as e:
+        logger.error(f"DexScreener tokens lookup failed: {e}")
+        pairs = []
+
+    results = []
+    for b in sol:
+        addr = b.get("tokenAddress")
+        addr_l = addr.lower()
+        token_pairs = [p for p in pairs if (p.get("chainId") == "solana") and (p.get("baseToken") or {}).get("address", "").lower() == addr_l]
+        best = None
+        for p in token_pairs:
+            liq = _safe_get(p, "liquidity", "usd") or 0
+            try:
+                liq = float(liq)
+            except Exception:
+                liq = 0
+            if best is None or liq > (float(_safe_get(best, "liquidity", "usd") or 0) if isinstance(best, dict) else 0):
+                best = p
+
+        base = (best or {}).get("baseToken") if isinstance(best, dict) else {}
+        symbol = (base.get("symbol") or "").upper()
+        name = base.get("name")
+        url = (best or {}).get("url") or b.get("url")
+        liq_usd = _safe_get(best or {}, "liquidity", "usd")
+
+        if symbol:
+            results.append(
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "address": addr,
+                    "url": url,
+                    "liquidity_usd": liq_usd,
+                    "boost": b.get("totalAmount") or b.get("amount"),
+                }
+            )
+
+    payload = {"trending": results}
+    await cache.set(cache_key, payload, ttl=60)
+    return payload
+
+
+@router.get("/api/ohlcv")
+async def get_ohlcv(address: str, interval: str = "15m", limit: int = 200):
+    if _detect_chain(address) != "solana":
+        raise HTTPException(status_code=400, detail="Only Solana addresses are supported")
+
+    limit = max(1, min(int(limit or 200), 500))
+    raw_items = await birdeye_client.get_ohlcv(address, interval=interval, limit=limit) or []
+
+    candles = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+
+        t = item.get("unixTime") or item.get("time") or item.get("t")
+        if t is None:
+            continue
+        try:
+            t = int(t)
+        except Exception:
+            continue
+        if t > 1_000_000_000_000:
+            t = int(t / 1000)
+
+        def _num(*keys):
+            for k in keys:
+                if k in item:
+                    try:
+                        return float(item[k])
+                    except Exception:
+                        return None
+            return None
+
+        o = _num("open", "o")
+        h = _num("high", "h")
+        l = _num("low", "l")
+        c = _num("close", "c")
+        if o is None or h is None or l is None or c is None:
+            continue
+
+        candles.append({"time": t, "open": o, "high": h, "low": l, "close": c})
+
+    return {"candles": candles}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN ANALYSIS ENDPOINT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -165,11 +280,14 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                                 base_token = best_pair.get("baseToken", {})
                                 if base_token.get("symbol", "").upper() == ticker:
                                     contract_address = base_token.get("address")
-                                    chain_type = target_chain if target_chain != "ethereum" else "evm"
+                                    chain_type = "solana" if target_chain == "solana" else "evm"
                                     logger.info(f"✅ Resolved {ticker} → {contract_address[:8]}... ({target_chain})")
                                     break
             except Exception as e:
                 logger.error(f"❌ DexScreener search failed: {e}")
+
+    if not contract_address:
+        raise HTTPException(status_code=400, detail="Unable to resolve contract address")
 
     # Check cache
     if not force_refresh:

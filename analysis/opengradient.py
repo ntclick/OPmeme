@@ -643,7 +643,7 @@ class OpenGradientAnalyzer:
             }
             return
 
-        if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
+        if self.REQUIRE_X402_TX and tx_hash and not _has_real_tx_hash(tx_hash):
             err = f"x402 tx hash required but got: {tx_hash}"
             logger.warning(f"[METHOD A STREAM] {err}")
             yield {
@@ -660,6 +660,11 @@ class OpenGradientAnalyzer:
                 },
             }
             return
+
+        if self.REQUIRE_X402_TX and not tx_hash:
+            logger.warning(
+                "[METHOD A STREAM] Missing x402 tx hash (tx_hash=None). Continuing with AI output but verification will be unavailable."
+            )
 
         ai_result = self._parse_ai_output(raw_output, token_type, algo_score)
         required_fields = ["ai_trust_score", "ai_sentiment_score", "verdict", "red_flags", "green_flags"]
