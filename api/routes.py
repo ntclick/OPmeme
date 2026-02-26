@@ -802,9 +802,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
 
         require_x402 = bool(getattr(opengradient_analyzer, "REQUIRE_X402_TX", False))
         if require_x402 and not ai_inference_success:
-            raise HTTPException(
-                status_code=502,
-                detail=f"OpenGradient x402 verification is required but no verifiable tx_hash was produced. {ai_error or ''}".strip(),
+            logger.warning(
+                "⚠️ OpenGradient x402 verification did not produce a verifiable tx_hash; continuing without verification"
             )
 
         # Always get the algorithmic score first

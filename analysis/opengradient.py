@@ -657,23 +657,8 @@ class OpenGradientAnalyzer:
         settlement_mode = _resolve_settlement_mode(
             og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
         )
-        if self.REQUIRE_X402_TX and settlement_mode is None:
-            err = "x402 on-chain settlement mode is required but not available in this SDK build"
-            logger.warning(f"[METHOD A STREAM] {err}")
-            yield {
-                "type": "done",
-                "result": {
-                    "ai_result": None,
-                    "tx_hash": None,
-                    "transaction_hash": None,
-                    "model_cid": selected_model,
-                    "raw_output": None,
-                    "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
-                    "used_opengradient": False,
-                    "error": err,
-                },
-            }
-            return
+        if settlement_mode is None and hasattr(og.x402SettlementMode, "SETTLE_METADATA"):
+            settlement_mode = og.x402SettlementMode.SETTLE_METADATA
 
         queue: asyncio.Queue[dict] = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -693,6 +678,8 @@ class OpenGradientAnalyzer:
                 )
 
                 for chunk in stream:
+                    if tx_hash is None:
+                        tx_hash = _extract_tx_hash(chunk) or tx_hash
                     try:
                         choices = getattr(chunk, "choices", None)
                         if not choices:
@@ -774,22 +761,7 @@ class OpenGradientAnalyzer:
             return
 
         if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
-            err = f"x402 tx hash required but got: {tx_hash}"
-            logger.warning(f"[METHOD A STREAM] {err}")
-            yield {
-                "type": "done",
-                "result": {
-                    "ai_result": None,
-                    "tx_hash": None,
-                    "transaction_hash": tx_hash,
-                    "model_cid": selected_model,
-                    "raw_output": raw_output,
-                    "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
-                    "used_opengradient": False,
-                    "error": err,
-                },
-            }
-            return
+            logger.warning(f"[METHOD A STREAM] x402 tx hash missing/invalid: {tx_hash}")
 
         ai_result = self._parse_ai_output(raw_output, token_type, algo_score)
         required_fields = ["ai_trust_score", "ai_sentiment_score", "verdict", "red_flags", "green_flags"]
@@ -902,10 +874,8 @@ class OpenGradientAnalyzer:
             settlement_mode = _resolve_settlement_mode(
                 og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
             )
-            if self.REQUIRE_X402_TX and settlement_mode is None:
-                raise RuntimeError(
-                    "x402 on-chain settlement mode is required but not available in this SDK build"
-                )
+            if settlement_mode is None and hasattr(og.x402SettlementMode, "SETTLE_METADATA"):
+                settlement_mode = og.x402SettlementMode.SETTLE_METADATA
             
             completion = self._client.llm.chat(
                 model=model_cid,
@@ -932,7 +902,7 @@ class OpenGradientAnalyzer:
             logger.info(f"🔍 [METHOD A] Settlement mode used: {settlement_mode}")
 
             if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
-                raise RuntimeError(f"x402 tx hash required but got: {tx_hash}")
+                logger.warning(f"[METHOD A] x402 tx hash missing/invalid: {tx_hash}")
             
             logger.info(f"✅ [METHOD A] Direct LLM success - TX: {tx_hash}, finish: {finish_reason}")
             logger.info(f"📝 Raw output: {raw_output[:300]}...")
