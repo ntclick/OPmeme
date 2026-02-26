@@ -508,6 +508,14 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         
         liq_usd = birdeye_data.get("liquidity") or _safe_get(dex_data, "liquidity", "usd") or 0
 
+        market_cap = (
+            birdeye_data.get("market_cap")
+            or dex_data.get("marketCap")
+            or dex_data.get("fdv")
+            or token_info.get("marketCap")
+            or 0
+        )
+
         if isinstance(token_info, dict) and token_age_hours is not None:
             token_info["age_hours"] = token_age_hours
         
@@ -519,6 +527,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             holder=holder_score,
             security=security_result.get("security_score", 50),
             whale=whale_score,
+            market_cap=market_cap,
             token_info=token_info,
             holder_data=holder_data,
             liq_usd=liq_usd,
@@ -571,13 +580,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # ══════════════════════════════════════════════════════════════════════
         
         # Prepare context for AI
-        market_cap = (
-            birdeye_data.get("market_cap")
-            or dex_data.get("marketCap")
-            or dex_data.get("fdv")
-            or token_info.get("marketCap")
-            or 0
-        )
         volume_24h = birdeye_data.get("volume_24h") or _safe_get(dex_data, "volume", "h24") or 0
         buy_sell_ratio = trade_result.get("buy_sell_ratio")
 
@@ -795,14 +797,27 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             ai_trust_score=ai_trust_score if ai_inference_success and ai_trust_score is not None else None,
         )
         
-        tech_total_100 = round((overall["tech_total"] / 0.65) if overall.get("tech_total") is not None else 0, 1)
-        onchain_total_100 = round((overall["onchain_total"] / 0.35) if overall.get("onchain_total") is not None else 0, 1)
+        scale_factor = 1.0
+        if overall.get("raw") and isinstance(overall.get("score"), int) and overall["score"] < overall["raw"]:
+            try:
+                scale_factor = float(overall["score"]) / float(overall["raw"]) if overall["raw"] else 1.0
+            except Exception:
+                scale_factor = 1.0
+
+        tech_contrib_raw = float(overall.get("tech_total") or 0)
+        onchain_contrib_raw = float(overall.get("onchain_total") or 0)
+        tech_contrib = round(tech_contrib_raw * scale_factor, 1)
+        onchain_contrib = round(onchain_contrib_raw * scale_factor, 1)
+
+        tech_total_100 = round((tech_contrib / 0.65) if tech_contrib else 0, 1)
+        onchain_total_100 = round((onchain_contrib / 0.35) if onchain_contrib else 0, 1)
 
         breakdown = {
             "technical": {
                 "total": tech_total_100,
                 "weight": "65%",
-                "contribution": round(overall["tech_total"], 1),
+                "contribution": tech_contrib,
+                "contribution_raw": round(tech_contrib_raw, 1),
                 "components": {
                     "momentum": {"score": momentum_result.get("momentum_score", 50), "weight": "20%", 
                                 "trend": momentum_result.get("trend"), "details": momentum_result.get("details", [])},
@@ -817,7 +832,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "onchain": {
                 "total": onchain_total_100,
                 "weight": "35%",
-                "contribution": round(overall["onchain_total"], 1),
+                "contribution": onchain_contrib,
+                "contribution_raw": round(onchain_contrib_raw, 1),
                 "components": {
                     "holder": {"score": holder_score, "weight": "12%", "holder_count": holder_count},
                     "security": {"score": security_result.get("security_score", 50), "weight": "13%",
@@ -1029,6 +1045,7 @@ def _calc_whale_score(top10: float | None) -> int:
 def _calc_overall_v31(
     momentum: int, volume: int, trade: int, liquidity: int,
     holder: int, security: int, whale: int,
+    market_cap: float,
     token_info: dict, holder_data: dict, liq_usd: float, age_hours: float | None, holder_count: int
 ) -> dict:
     """
@@ -1089,6 +1106,31 @@ def _calc_overall_v31(
         overrides.append(
             f"Moderate-low liquidity (${liq_usd:,.0f}) — exit risk is still meaningful; max score 55/100"
         )
+
+    # Low market cap (prevents tiny tokens from scoring too high)
+    mc = float(market_cap) if isinstance(market_cap, (int, float)) else 0.0
+    if mc and mc > 0:
+        if mc < 100_000:
+            cap_before = cap
+            cap = min(cap, 45 if is_established else 35)
+            if cap < cap_before:
+                overrides.append(
+                    f"Very low market cap (${mc:,.0f}) — early-stage token, easier to manipulate; max score {cap}/100"
+                )
+        elif mc < 300_000 and not is_established:
+            cap_before = cap
+            cap = min(cap, 55)
+            if cap < cap_before:
+                overrides.append(
+                    f"Low market cap (${mc:,.0f}) — higher volatility and liquidity risk; max score {cap}/100"
+                )
+        elif mc < 1_000_000 and not is_established:
+            cap_before = cap
+            cap = min(cap, 70)
+            if cap < cap_before:
+                overrides.append(
+                    f"Small market cap (${mc:,.0f}) — higher risk than established tokens; max score {cap}/100"
+                )
     
     # Whale concentration (stronger caps)
     raw_top10 = holder_data.get("top10_pct") if isinstance(holder_data, dict) else None

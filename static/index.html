@@ -417,7 +417,7 @@
                     
                     <div class="flex items-end gap-2 mb-4">
                         <span class="text-3xl font-bold text-white" id="techScoreTotal">--</span>
-                        <span class="text-sm text-gray-500 mb-1">/100</span>
+                        <span class="text-sm text-gray-500 mb-1">/65</span>
                     </div>
                     
                     <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm">
@@ -454,7 +454,7 @@
 
                     <div class="flex items-end gap-2 mb-4">
                         <span class="text-3xl font-bold text-white" id="onchainScoreTotal">--</span>
-                        <span class="text-sm text-gray-500 mb-1">/100</span>
+                        <span class="text-sm text-gray-500 mb-1">/35</span>
                     </div>
 
                     <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm">
@@ -845,6 +845,39 @@
     let _chart = null;
     let _chartSeries = null;
     let _chartResizeObs = null;
+
+    function renderDexChart(chartUrl) {
+        const chartSection = document.getElementById('chartSection');
+        const container = document.getElementById('chartContainer');
+        if (!chartSection || !container) return;
+
+        if (_chartResizeObs) {
+            try { _chartResizeObs.disconnect(); } catch (e) {}
+            _chartResizeObs = null;
+        }
+
+        if (_chart) {
+            try { _chart.remove(); } catch (e) {}
+            _chart = null;
+            _chartSeries = null;
+        }
+
+        chartSection.classList.remove('hidden');
+
+        let safeUrl = null;
+        try {
+            const u = new URL(String(chartUrl), window.location.origin);
+            if (u.hostname && u.hostname.toLowerCase().endsWith('dexscreener.com')) safeUrl = u.toString();
+        } catch (e) {}
+
+        if (!safeUrl) {
+            container.innerHTML = '';
+            chartSection.classList.add('hidden');
+            return;
+        }
+
+        container.innerHTML = `<iframe src="${safeUrl}" style="width:100%;height:420px;" class="w-full" frameborder="0" loading="lazy" allow="clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>`;
+    }
 
     async function renderChartOnly(address) {
         const chartSection = document.getElementById('chartSection');
@@ -1318,8 +1351,23 @@
         const riskConfig = getRiskConfig(score);
         const market = data.market_data || {};
         const tokenMeta = market.token || {};
-        const symbol = (tokenMeta.symbol || data.ticker || '').toUpperCase();
-        document.getElementById('tickerDisplay').innerText = "$" + symbol;
+        const addrForDisplay = (data.contract_address || tokenMeta.address || '').toString();
+        const rawSymbol = (tokenMeta.symbol || data.ticker || '').toString();
+        const symbol = rawSymbol.toUpperCase();
+        const looksLikeAddress = symbol && symbol.length > 15 && !symbol.includes(' ');
+        const isSameAsAddress = addrForDisplay && symbol && addrForDisplay.toUpperCase() === symbol;
+        const hasGoodSymbol = symbol && symbol.length > 0 && symbol.length <= 15 && !isSameAsAddress;
+
+        if (hasGoodSymbol) {
+            document.getElementById('tickerDisplay').innerText = "$" + symbol;
+        } else if (tokenMeta.name) {
+            document.getElementById('tickerDisplay').innerText = tokenMeta.name;
+        } else if (addrForDisplay) {
+            const shortAddr = addrForDisplay.substring(0, 6) + '...' + addrForDisplay.substring(addrForDisplay.length - 4);
+            document.getElementById('tickerDisplay').innerText = shortAddr;
+        } else {
+            document.getElementById('tickerDisplay').innerText = "--";
+        }
 
         const logoEl = document.getElementById('tokenLogo');
         if (logoEl) {
@@ -1334,12 +1382,20 @@
         }
 
         const tokenNameEl = document.getElementById('tokenNameDisplay');
-        if (tokenNameEl) tokenNameEl.innerText = tokenMeta.name ? tokenMeta.name : '';
+        if (tokenNameEl) {
+            if (tokenMeta.name && hasGoodSymbol) tokenNameEl.innerText = tokenMeta.name;
+            else if (tokenMeta.name) tokenNameEl.innerText = tokenMeta.name;
+            else if (hasGoodSymbol) tokenNameEl.innerText = '';
+            else tokenNameEl.innerText = '';
+        }
 
         const chartSection = document.getElementById('chartSection');
         if (chartSection) {
+            const chartUrl = market.chart_url;
             const chartAddress = data.contract_address || tokenMeta.address || market.contract_address;
-            if (chartAddress) {
+            if (chartUrl && typeof chartUrl === 'string') {
+                renderDexChart(chartUrl);
+            } else if (chartAddress) {
                 renderChartOnly(chartAddress).catch(() => {});
             } else {
                 chartSection.classList.add('hidden');
@@ -1432,14 +1488,14 @@
         
         const breakdown = data.breakdown || {};
         const tc = breakdown.technical?.components || {};
-        document.getElementById('techScoreTotal').innerText = fmtScore(breakdown.technical?.total);
-        
+        document.getElementById('techScoreTotal').innerText = fmtScore((breakdown.technical?.contribution ?? breakdown.technical?.total));
+
         document.getElementById('score_momentum').innerText = tc.momentum?.score ?? '--';
         document.getElementById('score_volume').innerText = tc.volume?.score ?? '--';
         document.getElementById('score_trade').innerText = tc.trade_pressure?.score ?? '--';
         document.getElementById('score_liquidity').innerText = tc.liquidity?.score ?? '--';
         
-        document.getElementById('onchainScoreTotal').innerText = fmtScore(breakdown.onchain?.total);
+        document.getElementById('onchainScoreTotal').innerText = fmtScore((breakdown.onchain?.contribution ?? breakdown.onchain?.total));
         const oc = breakdown.onchain?.components || {};
         document.getElementById('score_holder').innerText = oc.holder?.score ?? '--';
         document.getElementById('score_security').innerText = oc.security?.score ?? '--';
