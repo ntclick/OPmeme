@@ -50,35 +50,46 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_settlement_mode(mode_enum: Any, *, require_onchain: bool = False):
-    """Pick SETTLE for real on-chain tx hash (requires OPG tokens).
-    
-    SETTLE ("private") - Returns real on-chain tx hash (0x...) ✅
-    SETTLE_BATCH ("batch") - May work, batched settlement
-    SETTLE_METADATA ("individual") - Returns 'external' ❌
-    """
+    """Pick best available settlement mode across SDK enum naming variants."""
 
     if mode_enum is None:
         return None
 
-    if not require_onchain and hasattr(mode_enum, "SETTLE_METADATA"):
-        return getattr(mode_enum, "SETTLE_METADATA")
+    if require_onchain:
+        preferred = [
+            "SETTLE_INDIVIDUAL_WITH_METADATA",
+            "SETTLE_METADATA",
+            "SETTLE_INDIVIDUAL",
+            "SETTLE",
+            "SETTLE_ONCHAIN",
+            "SETTLE_PRIVATE",
+            "SETTLE_TX",
+            "SETTLE_PAYMENT",
+            "SETTLE_BATCH",
+        ]
+    else:
+        preferred = [
+            "SETTLE_BATCH",
+            "SETTLE_INDIVIDUAL",
+            "SETTLE",
+            "SETTLE_INDIVIDUAL_WITH_METADATA",
+            "SETTLE_METADATA",
+        ]
 
-    preferred_onchain = [
-        "SETTLE",
-        "SETTLE_ONCHAIN",
-        "SETTLE_PRIVATE",
-        "SETTLE_TX",
-        "SETTLE_PAYMENT",
-        "SETTLE_BATCH",
-    ]
-    for name in preferred_onchain:
+    for name in preferred:
         if hasattr(mode_enum, name):
             return getattr(mode_enum, name)
 
-    if not require_onchain and hasattr(mode_enum, "SETTLE_METADATA"):
-        return getattr(mode_enum, "SETTLE_METADATA")
-
     return None
+
+
+def _settlement_mode_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    return str(value)
 
 
 def _extract_tx_hash(value: Any) -> Optional[str]:
@@ -103,15 +114,199 @@ def _extract_tx_hash(value: Any) -> Optional[str]:
         "tx_hash",
         "txHash",
         "transactionHash",
-        "payment_hash",
-        "paymentHash",
-        "payment_tx_hash",
-        "paymentTxHash",
         "settlement_hash",
         "settlementHash",
         "settlement_tx_hash",
         "settlementTxHash",
-        "hash",
+    )
+
+    if isinstance(value, dict):
+        for k in candidate_names:
+            s = _to_str(value.get(k))
+            if s:
+                return s
+    else:
+        for k in candidate_names:
+            try:
+                s = _to_str(getattr(value, k, None))
+            except Exception:
+                s = None
+            if s:
+                return s
+
+    seen: set[int] = set()
+
+    def _walk(v: Any, depth: int) -> Optional[str]:
+        if v is None or depth <= 0:
+            return None
+        obj_id = id(v)
+        if obj_id in seen:
+            return None
+        seen.add(obj_id)
+
+        if isinstance(v, dict):
+            for kk in candidate_names:
+                s = _to_str(v.get(kk))
+                if s:
+                    return s
+            for vv in v.values():
+                out = _walk(vv, depth - 1)
+                if out:
+                    return out
+            return None
+
+        if isinstance(v, (list, tuple, set)):
+            for vv in v:
+                out = _walk(vv, depth - 1)
+                if out:
+                    return out
+            return None
+
+        try:
+            if hasattr(v, "model_dump") and callable(getattr(v, "model_dump")):
+                dumped = v.model_dump()
+                return _walk(dumped, depth - 1)
+        except Exception:
+            pass
+
+        try:
+            d = getattr(v, "__dict__", None)
+            if isinstance(d, dict):
+                return _walk(d, depth - 1)
+        except Exception:
+            pass
+
+        return None
+
+    return _walk(value, 4)
+
+
+def _extract_verification(value: Any) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+
+    def _normalize(v: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(v, dict):
+            return None
+        method = v.get("method") or v.get("verification_method") or v.get("type")
+        proof = v.get("proof") or v.get("attestation") or v.get("signature")
+        verified_by = v.get("verified_by") or v.get("verifier")
+
+        out: dict[str, Any] = {}
+        if method is not None:
+            out["method"] = method
+        if proof is not None:
+            out["proof"] = proof
+        if verified_by is not None:
+            out["verified_by"] = verified_by
+
+        # Keep additional keys for forward compatibility/debugging.
+        for k in ("settled", "payment_id", "tx_hash"):
+            if k in v and k not in out:
+                out[k] = v[k]
+
+        return out or None
+
+    def _get_attr(obj: Any, name: str) -> Any:
+        try:
+            return getattr(obj, name, None)
+        except Exception:
+            return None
+
+    # Direct fields first
+    if isinstance(value, dict):
+        for key in ("verification", "tee_verification", "attestation", "proof"):
+            normalized = _normalize(value.get(key))
+            if normalized:
+                return normalized
+        normalized = _normalize(value)
+        if normalized:
+            return normalized
+    else:
+        for key in ("verification", "tee_verification", "attestation"):
+            normalized = _normalize(_get_attr(value, key))
+            if normalized:
+                return normalized
+
+    # Recursive walk for nested SDK objects
+    seen: set[int] = set()
+
+    def _walk(v: Any, depth: int) -> Optional[dict[str, Any]]:
+        if v is None or depth <= 0:
+            return None
+        obj_id = id(v)
+        if obj_id in seen:
+            return None
+        seen.add(obj_id)
+
+        if isinstance(v, dict):
+            for key in ("verification", "tee_verification", "attestation", "payment_response"):
+                normalized = _normalize(v.get(key))
+                if normalized:
+                    return normalized
+            normalized = _normalize(v)
+            if normalized:
+                return normalized
+            for vv in v.values():
+                out = _walk(vv, depth - 1)
+                if out:
+                    return out
+            return None
+
+        if isinstance(v, (list, tuple, set)):
+            for vv in v:
+                out = _walk(vv, depth - 1)
+                if out:
+                    return out
+            return None
+
+        try:
+            if hasattr(v, "model_dump") and callable(getattr(v, "model_dump")):
+                dumped = v.model_dump()
+                out = _walk(dumped, depth - 1)
+                if out:
+                    return out
+        except Exception:
+            pass
+
+        try:
+            d = getattr(v, "__dict__", None)
+            if isinstance(d, dict):
+                out = _walk(d, depth - 1)
+                if out:
+                    return out
+        except Exception:
+            pass
+
+        return None
+
+    return _walk(value, 4)
+
+
+def _extract_payment_hash(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    def _to_str(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, bytes):
+            try:
+                v = v.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        if isinstance(v, str):
+            s = v.strip()
+            return s or None
+        return None
+
+    candidate_names = (
+        "payment_hash",
+        "paymentHash",
+        "payment_tx_hash",
+        "paymentTxHash",
+        "payment_id",
+        "paymentId",
     )
 
     if isinstance(value, dict):
@@ -243,12 +438,17 @@ class SafeOpenGradientLLM(BaseChatModel):
         # 3. Call SDK synchronously
         try:
             settlement_mode = _resolve_settlement_mode(og.x402SettlementMode, require_onchain=False)
+            chat_kwargs = {
+                "model": getattr(og.TEE_LLM, self.model_enum),
+                "messages": formatted_msgs,
+                "max_tokens": 800,
+                "temperature": 0.3,
+            }
+            if settlement_mode is not None:
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
+
             res = getattr(self.client, "llm").chat(
-                model=getattr(og.TEE_LLM, self.model_enum),
-                messages=formatted_msgs,
-                max_tokens=800,
-                temperature=0.3,
-                x402_settlement_mode=settlement_mode or og.x402SettlementMode.SETTLE_METADATA,
+                **chat_kwargs,
             )
         except Exception as e:
             logger_err = f"TEE SDK Error: {e}"
@@ -657,8 +857,7 @@ class OpenGradientAnalyzer:
         settlement_mode = _resolve_settlement_mode(
             og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
         )
-        if settlement_mode is None and hasattr(og.x402SettlementMode, "SETTLE_METADATA"):
-            settlement_mode = og.x402SettlementMode.SETTLE_METADATA
+        settlement_mode_name = _settlement_mode_name(settlement_mode)
 
         queue: asyncio.Queue[dict] = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -667,19 +866,29 @@ class OpenGradientAnalyzer:
             raw_parts: list[str] = []
             tx_hash: Optional[str] = None
             payment_hash: Optional[str] = None
+            verification: Optional[dict[str, Any]] = None
             try:
+                chat_kwargs = {
+                    "model": model_cid,
+                    "messages": messages,
+                    "max_tokens": 2000,
+                    "temperature": 0.1,
+                    "stream": True,
+                }
+                if settlement_mode is not None:
+                    chat_kwargs["x402_settlement_mode"] = settlement_mode
+
                 stream = self._client.llm.chat(
-                    model=model_cid,
-                    messages=messages,
-                    max_tokens=2000,
-                    temperature=0.1,
-                    x402_settlement_mode=settlement_mode,
-                    stream=True,
+                    **chat_kwargs,
                 )
 
                 for chunk in stream:
                     if tx_hash is None:
                         tx_hash = _extract_tx_hash(chunk) or tx_hash
+                    if payment_hash is None:
+                        payment_hash = _extract_payment_hash(chunk) or payment_hash
+                    if verification is None:
+                        verification = _extract_verification(chunk) or verification
                     try:
                         choices = getattr(chunk, "choices", None)
                         if not choices:
@@ -697,12 +906,14 @@ class OpenGradientAnalyzer:
                             meta = json.loads(content[len("__OG_META__") :])
                             tx_hash = _extract_tx_hash(meta) or tx_hash
                             payment_hash = meta.get("payment_hash") or payment_hash
+                            verification = _extract_verification(meta) or verification
                             loop.call_soon_threadsafe(
                                 queue.put_nowait,
                                 {
                                     "type": "meta",
                                     "tx_hash": tx_hash,
                                     "payment_hash": payment_hash,
+                                    "verification": verification,
                                 },
                             )
                         except Exception:
@@ -721,6 +932,7 @@ class OpenGradientAnalyzer:
                         "raw_output": "".join(raw_parts),
                         "tx_hash": tx_hash,
                         "payment_hash": payment_hash,
+                        "verification": verification,
                     },
                 )
 
@@ -729,6 +941,8 @@ class OpenGradientAnalyzer:
         stream_error: Optional[str] = None
         raw_output: str = ""
         tx_hash: Optional[str] = None
+        payment_hash: Optional[str] = None
+        verification: Optional[dict[str, Any]] = None
 
         while True:
             event = await queue.get()
@@ -741,6 +955,8 @@ class OpenGradientAnalyzer:
             if event.get("type") == "stream_done":
                 raw_output = event.get("raw_output") or ""
                 tx_hash = event.get("tx_hash")
+                payment_hash = event.get("payment_hash")
+                verification = event.get("verification")
                 break
 
         if stream_error:
@@ -755,6 +971,9 @@ class OpenGradientAnalyzer:
                     "raw_output": raw_output,
                     "model_used": None,
                     "used_opengradient": False,
+                    "payment_hash": payment_hash,
+                    "settlement_mode": settlement_mode_name,
+                    "verification": verification,
                     "error": stream_error,
                 },
             }
@@ -779,6 +998,9 @@ class OpenGradientAnalyzer:
                     "raw_output": raw_output,
                     "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
                     "used_opengradient": True,
+                    "payment_hash": payment_hash,
+                    "settlement_mode": settlement_mode_name,
+                    "verification": verification,
                 },
             }
             return
@@ -791,6 +1013,9 @@ class OpenGradientAnalyzer:
             "raw_output": raw_output,
             "model_used": f"Direct LLM.chat(stream=True)/{selected_model}",
             "used_opengradient": True,
+            "payment_hash": payment_hash,
+            "settlement_mode": settlement_mode_name,
+            "verification": verification,
         }
 
         yield {"type": "done", "result": result}
@@ -874,19 +1099,23 @@ class OpenGradientAnalyzer:
             settlement_mode = _resolve_settlement_mode(
                 og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
             )
-            if settlement_mode is None and hasattr(og.x402SettlementMode, "SETTLE_METADATA"):
-                settlement_mode = og.x402SettlementMode.SETTLE_METADATA
+            settlement_mode_name = _settlement_mode_name(settlement_mode)
             
-            completion = self._client.llm.chat(
-                model=model_cid,
-                messages=messages,
-                max_tokens=2000,
-                temperature=0.1,
-                x402_settlement_mode=settlement_mode,
-            )
+            chat_kwargs = {
+                "model": model_cid,
+                "messages": messages,
+                "max_tokens": 2000,
+                "temperature": 0.1,
+            }
+            if settlement_mode is not None:
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
+
+            completion = self._client.llm.chat(**chat_kwargs)
             
             # Extract from completion object
             tx_hash = _extract_tx_hash(completion)
+            payment_hash = _extract_payment_hash(completion)
+            verification = _extract_verification(completion)
             finish_reason = getattr(completion, 'finish_reason', None)
             chat_output = getattr(completion, 'chat_output', None)
             
@@ -925,6 +1154,9 @@ class OpenGradientAnalyzer:
                         "raw_output": raw_output,
                         "model_used": f"Direct LLM.chat()/{selected_model}",
                         "used_opengradient": True,
+                        "payment_hash": payment_hash,
+                        "settlement_mode": settlement_mode_name,
+                        "verification": verification,
                     }
                 else:
                     logger.warning(f"[METHOD A] Missing fields: {missing_fields}, trying fallback...")
@@ -942,6 +1174,9 @@ class OpenGradientAnalyzer:
                     "raw_output": None,
                     "model_used": None,
                     "used_opengradient": False,
+                    "payment_hash": None,
+                    "settlement_mode": None,
+                    "verification": None,
                     "error": str(e),
                 }
 
@@ -957,6 +1192,9 @@ class OpenGradientAnalyzer:
                 "raw_output": None,
                 "model_used": None,
                 "used_opengradient": False,
+                "payment_hash": None,
+                "settlement_mode": None,
+                "verification": None,
                 "error": "x402 settlement is required but no verifiable tx_hash was produced",
             }
         try:
@@ -1003,6 +1241,9 @@ class OpenGradientAnalyzer:
                     "raw_output": raw_output,
                     "model_used": "LangChain ReAct (fallback)",
                     "used_opengradient": True,
+                    "payment_hash": None,
+                    "settlement_mode": None,
+                    "verification": None,
                 }
 
             logger.info(f"✅ [OPENGRADIENT] Method B Success - trust={ai_result.get('ai_trust_score')}")
@@ -1014,6 +1255,9 @@ class OpenGradientAnalyzer:
                 "raw_output": raw_output,
                 "model_used": "LangChain ReAct",
                 "used_opengradient": True,
+                "payment_hash": None,
+                "settlement_mode": None,
+                "verification": None,
             }
         
         except Exception as e:
@@ -1037,6 +1281,9 @@ class OpenGradientAnalyzer:
             "raw_output": None,
             "model_used": None,
             "used_opengradient": False,
+            "payment_hash": None,
+            "settlement_mode": None,
+            "verification": None,
             "error": error_msg,
         }
 

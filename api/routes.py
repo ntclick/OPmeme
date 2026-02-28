@@ -773,6 +773,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         ai_trust_score = None
         ai_inference_success = False
         tx_hash = None
+        payment_hash = None
+        settlement_mode = None
+        verification = None
         verify_url = None
         verdict = ""
         
@@ -783,6 +786,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             if not ai_data.get("verdict", "").startswith("Phân tích AI thất bại"):
                 ai_trust_score = ai_data.get("ai_trust_score")
                 ai_inference_success = True
+                payment_hash = ai_result.get("payment_hash")
+                settlement_mode = ai_result.get("settlement_mode")
+                verification = ai_result.get("verification")
                 tx_hash = ai_result.get("tx_hash") or ai_result.get("transaction_hash")
                 if isinstance(tx_hash, str) and tx_hash.lower() == "external":
                     tx_hash = None
@@ -801,7 +807,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 logger.warning("⚠️ AI returned default fallback - ignoring")
 
         require_x402 = bool(getattr(opengradient_analyzer, "REQUIRE_X402_TX", False))
-        if require_x402 and not ai_inference_success:
+        if require_x402 and ai_inference_success and not tx_hash:
             logger.warning(
                 "⚠️ OpenGradient x402 verification did not produce a verifiable tx_hash; continuing without verification"
             )
@@ -961,6 +967,9 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "red_flags": red_flags,
             "green_flags": green_flags,
             "tx_hash": tx_hash,
+            "payment_hash": payment_hash,
+            "settlement_mode": settlement_mode,
+            "verification": verification,
             "verify_url": verify_url,
             "tweets_analyzed": 0,
             "analyzed_at": datetime.utcnow(),
@@ -970,7 +979,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "algorithm_notes": [
                 f"Scoring: v3.1 (Technical 65% / On-Chain 35%) - Chain: {chain_type.upper()}",
                 "Social: DISABLED",
-                f"AI: {'✅ Verified by OpenGradient' if ai_inference_success else '⚠️ Algorithmic Only'}",
+                f"AI: {'✅ Verified by OpenGradient (TEE + settlement hash)' if ai_inference_success and tx_hash else ('⚠️ OpenGradient inference ok but settlement tx not verifiable yet' if ai_inference_success else '⚠️ Algorithmic Only')}",
                 f"Data: DexScreener={'✅' if dex_data else '❌'}"
             ],
             "data_sources": data_sources,
@@ -1002,6 +1011,7 @@ async def analyze_coin_stream(request: AnalyzeRequest, db: Session = Depends(get
                     {
                         "tx_hash": meta_evt.get("tx_hash"),
                         "payment_hash": meta_evt.get("payment_hash"),
+                        "verification": meta_evt.get("verification"),
                     },
                 )
             )
@@ -1012,8 +1022,17 @@ async def analyze_coin_stream(request: AnalyzeRequest, db: Session = Depends(get
             try:
                 res = await analyze_coin(request, db)
                 payload = jsonable_encoder(res)
-                if payload.get("tx_hash") and not meta_sent:
-                    await queue.put(("meta", {"tx_hash": payload.get("tx_hash"), "payment_hash": None}))
+                if (payload.get("tx_hash") or payload.get("payment_hash")) and not meta_sent:
+                    await queue.put(
+                        (
+                            "meta",
+                            {
+                                "tx_hash": payload.get("tx_hash"),
+                                "payment_hash": payload.get("payment_hash"),
+                                "verification": payload.get("verification"),
+                            },
+                        )
+                    )
                     meta_sent = True
                 await queue.put(("result", payload))
             except HTTPException as e:

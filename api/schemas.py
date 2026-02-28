@@ -129,6 +129,9 @@ class AnalyzeResponse(BaseModel):
 
     # Verification
     tx_hash: Optional[str] = None
+    payment_hash: Optional[str] = None
+    settlement_mode: Optional[str] = None
+    verification: Optional[dict[str, Any]] = None
     verify_url: Optional[str] = None
 
     # Metadata

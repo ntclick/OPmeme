@@ -1517,28 +1517,32 @@
 
         const ogBtn = document.getElementById('ogVerifyBtn');
         const aiBadgeLinkText = document.getElementById('aiBadgeLinkText');
-        if (data.tx_hash) {
-            ogBtn.href = data.verify_url;
-            ogBtn.classList.remove('opacity-50', 'pointer-events-none');
-            document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
-            aiBadgeLinkText.innerHTML = `${t.aiBadgeLink}${data.model_used ? ` (${data.model_used})` : ''} <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link w-3 h-3"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
-        } else if (data.opengradient_used) {
-            ogBtn.href = "#";
-            ogBtn.classList.add('opacity-50', 'pointer-events-none');
-            aiBadgeLinkText.innerText = data.model_used
-                ? `AI verified (${data.model_used})`
-                : 'AI verified';
-            document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
-            ogBtn.classList.remove('from-blue-900/40', 'to-blue-950/40');
-            ogBtn.classList.add('from-gray-900', 'to-black');
+        
+        // Only show verification badge if there's actual verification data
+        const hasVerification = data.tx_hash || data.payment_hash || data.settlement_mode || data.verification;
+        
+        if (hasVerification) {
+            ogBtn.classList.remove('hidden');
+            if (data.tx_hash) {
+                ogBtn.href = data.verify_url || `https://explorer.opengradient.ai/tx/${data.tx_hash}`;
+                ogBtn.classList.remove('opacity-50', 'pointer-events-none');
+                document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
+                const modelInfo = data.model_used ? ` (${data.model_used})` : '';
+                const txShort = data.tx_hash.substring(0, 10) + '...';
+                aiBadgeLinkText.innerHTML = `${t.aiBadgeLink}${modelInfo} • TX: ${txShort} <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link w-3 h-3"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+            } else if (data.payment_hash || data.settlement_mode || data.verification) {
+                // Has some verification data but no tx_hash yet
+                ogBtn.href = "#";
+                ogBtn.classList.add('opacity-50', 'pointer-events-none');
+                const parts = [];
+                if (data.settlement_mode) parts.push(data.settlement_mode);
+                if (data.payment_hash) parts.push(`Payment: ${data.payment_hash.substring(0, 10)}...`);
+                aiBadgeLinkText.innerText = parts.join(' • ') || 'Verification pending';
+                document.getElementById('aiBadgeTitle').innerText = t.aiBadgeTitle;
+            }
         } else {
-            ogBtn.href = "#";
-            ogBtn.classList.add('opacity-50', 'pointer-events-none');
-            aiBadgeLinkText.innerText = 'Thuật toán chấm điểm (AI bảo trì)';
-            document.getElementById('aiBadgeTitle').innerText = 'CHẾ ĐỘ DỰ PHÒNG';
-
-            ogBtn.classList.remove('from-gray-900', 'to-black');
-            ogBtn.classList.add('from-blue-900/40', 'to-blue-950/40');
+            // No verification data - hide the badge completely
+            ogBtn.classList.add('hidden');
         }
 
         const txHashEl = document.getElementById('txHash');
