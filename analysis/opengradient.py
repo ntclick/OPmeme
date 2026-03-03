@@ -15,9 +15,19 @@ import json
 import logging
 import os
 import threading
+import ssl
+import certifi
 from pathlib import Path
 from typing import Optional, Any, List, AsyncGenerator
 import uuid
+
+# Disable SSL verification for self-signed certificates
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+
+# Create SSL context that doesn't verify certificates
+ssl._create_default_https_context = ssl._create_unverified_context
 
 # NOTE: DNS resolution and SSL handled by system - no custom patching needed
 
