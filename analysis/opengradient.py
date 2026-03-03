@@ -32,15 +32,8 @@ try:
 except ImportError:
     ETH_ACCOUNT_AVAILABLE = False
 
-# Disable SSL verification for self-signed certificates
-os.environ['PYTHONHTTPSVERIFY'] = '0'
-os.environ['CURL_CA_BUNDLE'] = ''
-os.environ['REQUESTS_CA_BUNDLE'] = ''
-
-# Create SSL context that doesn't verify certificates
-ssl._create_default_https_context = ssl._create_unverified_context
-
-# NOTE: DNS resolution and SSL handled by system - no custom patching needed
+# Ensure proper SSL verification with certifi
+ssl_context = ssl.create_default_context(cafile=certifi.where())
 
 # Set Firebase API Key for OpenGradient SDK if provided
 from config import OPENGRADIENT_FIREBASE_API_KEY
