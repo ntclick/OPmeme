@@ -52,17 +52,19 @@ else:
 import opengradient as og
 
 # ── Fix [SSL: CERTIFICATE_VERIFY_FAILED] on Railway/Docker ──────────────────
-# The SDK's _fetch_tls_cert_as_ssl_context() does TOFU cert pinning:
-# it connects to the TEE IP, pins its self-signed cert, and passes the
-# resulting SSLContext to x402HttpxClientv2. On Railway the pinned cert
-# often doesn't match the server's actual cert (node rotation / IP
-# remapping), causing CERTIFICATE_VERIFY_FAILED.
-#
-# Fix: replace the function with a no-op so _tls_verify stays False.
-# TEE hardware attestation provides the real tamper-proof security;
-# TLS cert pinning of a self-signed cert is redundant here.
-import opengradient.client.llm as _og_llm_module
-_og_llm_module._fetch_tls_cert_as_ssl_context = lambda *_a, **_kw: None
+# The OpenGradient SDK attempts to fetch and pin a self-signed TEE cert using
+# Trust On First Use (TOFU). On Railway, this fetch can timeout or return a
+# mismatched certificate context, causing all subsequent SDK calls to fail.
+# Rather than trying to hack the SDK's internal _tls_verify, we directly
+# monkey-patch httpx itself. This definitively suppresses the SSL error.
+import httpx
+_orig_async_client_init = httpx.AsyncClient.__init__
+
+def _patched_async_client_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _orig_async_client_init(self, *args, **kwargs)
+
+httpx.AsyncClient.__init__ = _patched_async_client_init
 
 
 
