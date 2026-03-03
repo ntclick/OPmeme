@@ -1004,20 +1004,66 @@ class OpenGradientAnalyzer:
                             # Get private key for signing
                             pk = _resolve_private_key()
                             if pk and "YOUR" not in pk:
-                                # Create payment authorization
+                                # Get authorization parameters
+                                auth = {
+                                    "from": Account.from_key(pk).address,
+                                    "to": payment_req.get("payTo", "0x339c7de83d1a62edafbaac186382ee76584d294f"),
+                                    "value": payment_req.get("maxAmountRequired", "1000000"),
+                                    "validAfter": 0,
+                                    "validBefore": int(asyncio.get_event_loop().time()) + 300,
+                                    "nonce": "0x" + uuid.uuid4().hex[:32],
+                                }
+                                
+                                # Create EIP-712 typed data structure for Permit2/transferWithAuthorization
+                                # This is the standard structure for USDC/EIP-3009 style authorizations
+                                domain = {
+                                    "name": "USD Coin",
+                                    "version": "2",
+                                    "chainId": 84532,  # Base Sepolia
+                                    "verifyingContract": "0x240b09731D96979f50B2C649C9CE10FcF9C7987F",  # OPG token
+                                }
+                                
+                                types = {
+                                    "EIP712Domain": [
+                                        {"name": "name", "type": "string"},
+                                        {"name": "version", "type": "string"},
+                                        {"name": "chainId", "type": "uint256"},
+                                        {"name": "verifyingContract", "type": "address"},
+                                    ],
+                                    "TransferWithAuthorization": [
+                                        {"name": "from", "type": "address"},
+                                        {"name": "to", "type": "address"},
+                                        {"name": "value", "type": "uint256"},
+                                        {"name": "validAfter", "type": "uint256"},
+                                        {"name": "validBefore", "type": "uint256"},
+                                        {"name": "nonce", "type": "bytes32"},
+                                    ],
+                                }
+                                
+                                message = {
+                                    "from": auth["from"],
+                                    "to": auth["to"],
+                                    "value": int(auth["value"]),
+                                    "validAfter": auth["validAfter"],
+                                    "validBefore": auth["validBefore"],
+                                    "nonce": auth["nonce"],
+                                }
+                                
+                                # Sign the EIP-712 typed data
+                                from eth_account.messages import encode_typed_data
+                                signable_message = encode_typed_data(domain, types, message)
+                                signed = Account.from_key(pk).sign_message(signable_message)
+                                signature = signed.signature.hex()
+                                
+                                # Create payment payload with signature
                                 payment_payload = {
                                     "payload": {
-                                        "signature": "0x",  # Placeholder - would need proper EIP-712 signing
-                                        "authorization": {
-                                            "from": Account.from_key(pk).address,
-                                            "to": payment_req.get("payTo", "0x339c7de83d1a62edafbaac186382ee76584d294f"),
-                                            "value": payment_req.get("maxAmountRequired", "1000000"),
-                                            "validAfter": 0,
-                                            "validBefore": int(asyncio.get_event_loop().time()) + 300,
-                                            "nonce": "0x" + uuid.uuid4().hex[:32],
-                                        }
+                                        "signature": signature,
+                                        "authorization": auth,
                                     }
                                 }
+                                
+                                logger.info(f"x402 payment signed for {auth['value']} OPG from {auth['from'][:8]}...")
                                 
                                 # Encode and add X-PAYMENT header
                                 payment_b64 = base64.b64encode(json.dumps(payment_payload).encode()).decode()
