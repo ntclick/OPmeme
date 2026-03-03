@@ -29,6 +29,14 @@ os.environ['REQUESTS_CA_BUNDLE'] = ''
 # Create SSL context that doesn't verify certificates
 ssl._create_default_https_context = ssl._create_unverified_context
 
+# Patch SSLContext at the lowest level
+original_ssl_context_init = ssl.SSLContext.__init__
+def patched_ssl_context_init(self, *args, **kwargs):
+    original_ssl_context_init(self, *args, **kwargs)
+    self.check_hostname = False
+    self.verify_mode = ssl.CERT_NONE
+ssl.SSLContext.__init__ = patched_ssl_context_init
+
 # Patch httpx globally to disable SSL verification
 import httpx
 original_async_client_init = httpx.AsyncClient.__init__
