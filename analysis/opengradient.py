@@ -984,17 +984,28 @@ class OpenGradientAnalyzer:
                 chat_payload["x402_settlement_mode"] = settlement_mode
 
             x402_cl = getattr(self._client.llm, "_x402_client", None)
-            # x402AsyncTransport older versions don't have `verify` param.
-            # llm.opengradient.ai has a valid TLS cert so default verify=True is correct.
-            try:
-                transport = x402AsyncTransport(x402_cl, verify=True) if x402_cl else None
-            except TypeError:
-                transport = x402AsyncTransport(x402_cl) if x402_cl else None
+            
+            # Since older x402v2 on Railway doesn't support the 'verify' kwarg natively,
+            # we explicitly create a base transport with verify=False and pass it in.
+            # verify=False is required for the IP fallback (self-signed cert).
+            base_transport = httpx.AsyncHTTPTransport(verify=False)
+            transport = x402AsyncTransport(x402_cl, transport=base_transport) if x402_cl else None
 
             url = "https://llm.opengradient.ai/v1/chat/completions"
-            async with httpx.AsyncClient(transport=transport, timeout=120.0) as http_client:
-                async with http_client.stream("POST", url, json=chat_payload) as response:
+            fallback_url = "https://3.15.214.21:443/v1/chat/completions"
+
+            async with httpx.AsyncClient(transport=transport, verify=False, timeout=120.0) as http_client:
+                try:
+                    req = http_client.build_request("POST", url, json=chat_payload)
+                    response = await http_client.send(req, stream=True)
                     response.raise_for_status()
+                except httpx.RequestError:
+                    # Fallback to direct IP if DNS resolution fails on Railway
+                    req = http_client.build_request("POST", fallback_url, json=chat_payload)
+                    response = await http_client.send(req, stream=True)
+                    response.raise_for_status()
+
+                async with response:
                     async for line in response.aiter_lines():
                         if not line or not line.startswith("data: "):
                             continue
