@@ -965,15 +965,10 @@ class OpenGradientAnalyzer:
         verification: Optional[dict[str, Any]] = None
 
         try:
-            # ── Direct HTTP call to official x402 Gateway ──────────────────
-
-            # https://docs.opengradient.ai/developers/x402/api-reference.html
-            # Use llm.opengradient.ai which has a proper TLS cert (no SSL error).
-            # x402AsyncTransport handles the 402 Payment Required / signing flow.
-            import httpx
-            from x402v2.http.clients.httpx import x402AsyncTransport
-
-            chat_payload: dict = {
+            # Use SDK streaming API directly.
+            # The SDK automatically handles x402 + DNS resolution (defaults to IP).
+            # The SSL self-signed cert issue is fixed by the lambda patch above.
+            chat_kwargs = {
                 "model": model_cid,
                 "messages": messages,
                 "max_tokens": 2000,
@@ -981,68 +976,45 @@ class OpenGradientAnalyzer:
                 "stream": True,
             }
             if settlement_mode is not None:
-                chat_payload["x402_settlement_mode"] = settlement_mode
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            x402_cl = getattr(self._client.llm, "_x402_client", None)
-            
-            # Since older x402v2 on Railway doesn't support the 'verify' kwarg natively,
-            # we explicitly create a base transport with verify=False and pass it in.
-            # verify=False is required for the IP fallback (self-signed cert).
-            base_transport = httpx.AsyncHTTPTransport(verify=False)
-            transport = x402AsyncTransport(x402_cl, transport=base_transport) if x402_cl else None
+            stream = self._client.llm.chat(**chat_kwargs)
 
-            url = "https://llm.opengradient.ai/v1/chat/completions"
-            fallback_url = "https://3.15.214.21:443/v1/chat/completions"
+            for chunk in stream:
+                tx_hash = _extract_tx_hash(chunk) or tx_hash
+                payment_hash = _extract_payment_hash(chunk) or payment_hash
+                verification = _extract_verification(chunk) or verification
 
-            async with httpx.AsyncClient(transport=transport, verify=False, timeout=120.0) as http_client:
                 try:
-                    req = http_client.build_request("POST", url, json=chat_payload)
-                    response = await http_client.send(req, stream=True)
-                    response.raise_for_status()
-                except httpx.RequestError:
-                    # Fallback to direct IP if DNS resolution fails on Railway
-                    req = http_client.build_request("POST", fallback_url, json=chat_payload)
-                    response = await http_client.send(req, stream=True)
-                    response.raise_for_status()
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
+                        continue
+                    delta = getattr(choices[0], "delta", None)
+                    content = getattr(delta, "content", None) if delta is not None else None
+                except Exception:
+                    continue
 
-                async with response:
-                    async for line in response.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data_str = line[len("data: "):]
-                        if data_str.strip() == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data_str)
-                            tx_hash = _extract_tx_hash(chunk) or tx_hash
-                            payment_hash = _extract_payment_hash(chunk) or payment_hash
-                            verification = _extract_verification(chunk) or verification
-                            choices = chunk.get("choices", [])
-                            if not choices:
-                                continue
-                            delta = choices[0].get("delta", {})
-                            content = delta.get("content")
-                            if not content or not isinstance(content, str):
-                                continue
-                            if content.startswith("__OG_META__"):
-                                try:
-                                    meta = json.loads(content[len("__OG_META__"):])
-                                    tx_hash = _extract_tx_hash(meta) or tx_hash
-                                    payment_hash = meta.get("payment_hash") or payment_hash
-                                    verification = _extract_verification(meta) or verification
-                                    yield {
-                                        "type": "meta",
-                                        "tx_hash": tx_hash,
-                                        "payment_hash": payment_hash,
-                                        "verification": verification,
-                                    }
-                                except Exception:
-                                    pass
-                                continue
-                            raw_parts.append(content)
-                        except json.JSONDecodeError:
-                            continue
+                if not content or not isinstance(content, str):
+                    continue
 
+                if content.startswith("__OG_META__"):
+                    try:
+                        meta = json.loads(content[len("__OG_META__"):])
+                        tx_hash = _extract_tx_hash(meta) or tx_hash
+                        payment_hash = meta.get("payment_hash") or payment_hash
+                        verification = _extract_verification(meta) or verification
+                        yield {
+                            "type": "meta",
+                            "tx_hash": tx_hash,
+                            "payment_hash": payment_hash,
+                            "verification": verification,
+                        }
+                    except Exception:
+                        pass
+                    continue
+
+                raw_parts.append(content)
+                        
         except Exception as e:
             stream_error = str(e)
 
