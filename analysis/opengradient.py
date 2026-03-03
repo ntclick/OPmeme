@@ -870,105 +870,94 @@ class OpenGradientAnalyzer:
         )
         settlement_mode_name = _settlement_mode_name(settlement_mode)
 
-        queue: asyncio.Queue[dict] = asyncio.Queue()
-        loop = asyncio.get_running_loop()
+        import httpx
+        import json
+        from x402v2.http.clients.httpx import x402AsyncTransport
 
-        def _worker() -> None:
-            raw_parts: list[str] = []
-            tx_hash: Optional[str] = None
-            payment_hash: Optional[str] = None
-            verification: Optional[dict[str, Any]] = None
-            try:
-                chat_kwargs = {
-                    "model": model_cid,
-                    "messages": messages,
-                    "max_tokens": 2000,
-                    "temperature": 0.1,
-                    "stream": True,
-                }
-                if settlement_mode is not None:
-                    chat_kwargs["x402_settlement_mode"] = settlement_mode
+        chat_payload = {
+            "model": "openai/gpt-4o" if "GPT_4O" in selected_model else model_cid,
+            "messages": messages,
+            "max_tokens": 2000,
+            "temperature": 0.1,
+            "stream": True,
+        }
+        if settlement_mode is not None:
+            chat_payload["x402_settlement_mode"] = settlement_mode
 
-                stream = self._client.llm.chat(
-                    **chat_kwargs,
-                )
-
-                for chunk in stream:
-                    if tx_hash is None:
-                        tx_hash = _extract_tx_hash(chunk) or tx_hash
-                    if payment_hash is None:
-                        payment_hash = _extract_payment_hash(chunk) or payment_hash
-                    if verification is None:
-                        verification = _extract_verification(chunk) or verification
-                    try:
-                        choices = getattr(chunk, "choices", None)
-                        if not choices:
-                            continue
-                        delta = getattr(choices[0], "delta", None)
-                        content = getattr(delta, "content", None) if delta is not None else None
-                    except Exception:
-                        continue
-
-                    if not content or not isinstance(content, str):
-                        continue
-
-                    if content.startswith("__OG_META__"):
-                        try:
-                            meta = json.loads(content[len("__OG_META__") :])
-                            tx_hash = _extract_tx_hash(meta) or tx_hash
-                            payment_hash = meta.get("payment_hash") or payment_hash
-                            verification = _extract_verification(meta) or verification
-                            loop.call_soon_threadsafe(
-                                queue.put_nowait,
-                                {
-                                    "type": "meta",
-                                    "tx_hash": tx_hash,
-                                    "payment_hash": payment_hash,
-                                    "verification": verification,
-                                },
-                            )
-                        except Exception:
-                            continue
-                        continue
-
-                    raw_parts.append(content)
-
-            except Exception as e:
-                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "error": str(e)})
-            finally:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    {
-                        "type": "stream_done",
-                        "raw_output": "".join(raw_parts),
-                        "tx_hash": tx_hash,
-                        "payment_hash": payment_hash,
-                        "verification": verification,
-                    },
-                )
-
-        threading.Thread(target=_worker, daemon=True).start()
-
+        x402_cl = getattr(self._client.llm, "_x402_client", None)
+        # Sử dụng đúng endpoint như được yêu cầu
+        url = "https://llm.opengradient.ai/v1/chat/completions"
+        transport = x402AsyncTransport(x402_cl, verify=False) if x402_cl else None
+        
         stream_error: Optional[str] = None
-        raw_output: str = ""
+        raw_parts: list[str] = []
         tx_hash: Optional[str] = None
         payment_hash: Optional[str] = None
         verification: Optional[dict[str, Any]] = None
 
-        while True:
-            event = await queue.get()
-            if event.get("type") == "meta":
-                yield event
-                continue
-            if event.get("type") == "error":
-                stream_error = event.get("error")
-                continue
-            if event.get("type") == "stream_done":
-                raw_output = event.get("raw_output") or ""
-                tx_hash = event.get("tx_hash")
-                payment_hash = event.get("payment_hash")
-                verification = event.get("verification")
-                break
+        try:
+            # Explicit verify=False overrides context globally
+            async with httpx.AsyncClient(transport=transport, verify=False, timeout=120.0) as http_client:
+                try:
+                    req = http_client.build_request("POST", url, json=chat_payload)
+                    response = await http_client.send(req, stream=True)
+                    response.raise_for_status()
+                except httpx.ConnectError:
+                    # Fallback if llm.opengradient.ai DNS fails
+                    url = "https://3.15.214.21:443/v1/chat/completions"
+                    req = http_client.build_request("POST", url, json=chat_payload)
+                    response = await http_client.send(req, stream=True)
+                    response.raise_for_status()
+
+                async with response:
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        
+                        data_str = line[len("data: "):]
+                        if data_str == "[DONE]":
+                            break
+
+                        try:
+                            chunk = json.loads(data_str)
+                            
+                            tx_hash = _extract_tx_hash(chunk) or tx_hash
+                            payment_hash = _extract_payment_hash(chunk) or payment_hash
+                            verification = _extract_verification(chunk) or verification
+
+                            choices = chunk.get("choices", [])
+                            if not choices:
+                                continue
+                                
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content")
+
+                            if not content or not isinstance(content, str):
+                                continue
+
+                            if content.startswith("__OG_META__"):
+                                try:
+                                    meta = json.loads(content[len("__OG_META__") :])
+                                    tx_hash = _extract_tx_hash(meta) or tx_hash
+                                    payment_hash = meta.get("payment_hash") or payment_hash
+                                    verification = _extract_verification(meta) or verification
+                                    yield {
+                                        "type": "meta",
+                                        "tx_hash": tx_hash,
+                                        "payment_hash": payment_hash,
+                                        "verification": verification,
+                                    }
+                                except Exception:
+                                    pass
+                                continue
+
+                            raw_parts.append(content)
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            stream_error = str(e)
+            
+        raw_output = "".join(raw_parts)
 
         if stream_error:
             logger.warning(f"[METHOD A STREAM] Failed: {stream_error}")
