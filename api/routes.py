@@ -238,36 +238,34 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
     def _normalize_llm_model(value: str | None) -> str | None:
         if value is None:
             return None
-        model = str(value).strip().upper()
+        model = str(value).strip()
         return model or None
 
+    # Official supported models from https://docs.opengradient.ai/developers/x402/
     allowed_llm_models = {
-        "GPT_4_1_2025_04_14",
-        "O4_MINI",
-        "GPT_5",
-        "GPT_5_MINI",
-        "GPT_5_2",
-        "CLAUDE_SONNET_4_5",
-        "CLAUDE_SONNET_4_6",
-        "CLAUDE_HAIKU_4_5",
-        "CLAUDE_OPUS_4_5",
-        "CLAUDE_OPUS_4_6",
-        "GEMINI_2_5_FLASH",
-        "GEMINI_2_5_PRO",
-        "GEMINI_2_5_FLASH_LITE",
-        "GEMINI_3_PRO",
-        "GEMINI_3_FLASH",
-        "GROK_4",
-        "GROK_4_FAST",
-        "GROK_4_1_FAST",
-        "GROK_4_1_FAST_NON_REASONING",
+        "openai/gpt-4.1-2025-04-14",
+        "openai/gpt-4o",
+        "openai/o4-mini",
+        "anthropic/claude-4.0-sonnet",
+        "anthropic/claude-3.7-sonnet",
+        "anthropic/claude-3.5-haiku",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-pro",
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-2.0-flash",
+        "x-ai/grok-3-beta",
+        "x-ai/grok-3-mini-beta",
+        "x-ai/grok-4.1-fast",
+        "x-ai/grok-4-1-fast-non-reasoning",
+        "x-ai/grok-2-1212",
+        "x-ai/grok-2-vision-latest",
     }
 
     normalized_model = _normalize_llm_model(llm_model)
     if normalized_model and normalized_model not in allowed_llm_models:
         logger.warning(f"Invalid llm_model requested: {normalized_model}. Falling back to default.")
         normalized_model = None
-    effective_model = normalized_model or "CLAUDE_SONNET_4_5"
+    effective_model = normalized_model or "openai/gpt-4o"
     
     # Detect chain type
     chain_type = _detect_chain(contract_address or ticker)

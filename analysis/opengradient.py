@@ -401,43 +401,47 @@ def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
 
 
 def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
-    """Normalize model ID to SDK enum name.
+    """Normalize model ID to SDK TEE_LLM enum name.
     
-    Handles both formats:
-    - SDK enum: "GPT_4O" → "GPT_4O"
+    Handles:
     - Model ID: "openai/gpt-4o" → "GPT_4O"
+    - SDK enum: "GPT_4O" → "GPT_4O"
     """
     if not value:
         return None
     
     model = str(value).strip().lower()
     
-    # Map from OpenGradient Model ID format (lowercase) to SDK enum name
+    # Map from documented model IDs to SDK TEE_LLM enum names
     model_id_to_enum = {
-        # OpenAI models
+        # OpenAI
         "openai/gpt-4o": "GPT_4O",
         "openai/gpt-4.1-2025-04-14": "GPT_4_1_2025_04_14",
         "openai/o4-mini": "O4_MINI",
-        # Anthropic models
-        "anthropic/claude-3.5-haiku": "CLAUDE_3_5_HAIKU",
-        "anthropic/claude-4.0-sonnet": "CLAUDE_SONNET_4_5",
+        # Anthropic
+        "anthropic/claude-4.0-sonnet": "CLAUDE_4_0_SONNET",
         "anthropic/claude-3.7-sonnet": "CLAUDE_3_7_SONNET",
-        # Google models
+        "anthropic/claude-3.5-haiku": "CLAUDE_3_5_HAIKU",
+        # Google
         "google/gemini-2.5-flash": "GEMINI_2_5_FLASH",
         "google/gemini-2.5-pro": "GEMINI_2_5_PRO",
+        "google/gemini-2.5-flash-lite": "GEMINI_2_5_FLASH_LITE",
         "google/gemini-2.0-flash": "GEMINI_2_0_FLASH",
-        # xAI models
+        # xAI
         "x-ai/grok-3-beta": "GROK_3_BETA",
         "x-ai/grok-3-mini-beta": "GROK_3_MINI_BETA",
+        "x-ai/grok-4.1-fast": "GROK_4_1_FAST",
+        "x-ai/grok-4-1-fast-non-reasoning": "GROK_4_1_FAST_NON_REASONING",
+        "x-ai/grok-2-1212": "GROK_2_1212",
+        "x-ai/grok-2-vision-latest": "GROK_2_VISION_LATEST",
     }
     
-    # If it's already an SDK enum (no slash), return as-is (uppercase)
-    if "/" not in model:
-        # It's an SDK enum name, return it uppercased
-        return model.upper()
+    # If it contains a slash, it's a model ID → map to enum
+    if "/" in model:
+        return model_id_to_enum.get(model)
     
-    # Map from Model ID to SDK enum
-    return model_id_to_enum.get(model, "GPT_4O")  # Default fallback
+    # Otherwise it's already an SDK enum name
+    return model.upper()
 
 
 def _has_real_tx_hash(tx_hash: Any) -> bool:
@@ -728,7 +732,7 @@ class OpenGradientAnalyzer:
         "GPT_4O",
         "GPT_4_1_2025_04_14",
         "CLAUDE_3_5_HAIKU",
-        "CLAUDE_SONNET_4_5",
+        "CLAUDE_4_0_SONNET",
     ]
     REQUIRE_X402_TX = False  # Disabled due to SSL certificate issues
 
@@ -917,21 +921,13 @@ class OpenGradientAnalyzer:
             {"role": "user", "content": input_text},
         ]
 
-        # Use model ID directly - x402 Gateway accepts Model ID strings
-        # Map SDK enum names back to Model IDs if needed
-        model_id_map = {
-            "GPT_4O": "openai/gpt-4o",
-            "GPT_4_1_2025_04_14": "openai/gpt-4.1-2025-04-14",
-            "O4_MINI": "openai/o4-mini",
-            "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
-            "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
-        }
-        
-        # Use Model ID directly (either from mapping or pass through)
-        if "/" in selected_model:
-            model_cid = selected_model  # Already a Model ID
+        # Convert model ID to og.TEE_LLM enum for SDK
+        tee_llm = getattr(og, 'TEE_LLM', None)
+        enum_name = _normalize_llm_model_enum(selected_model) or "GPT_4O"
+        if tee_llm and hasattr(tee_llm, enum_name):
+            model_enum = getattr(tee_llm, enum_name)
         else:
-            model_cid = model_id_map.get(selected_model, "openai/gpt-4o")
+            model_enum = selected_model  # Pass through as string fallback
         settlement_mode = _resolve_settlement_mode(
             og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
         )
@@ -948,7 +944,7 @@ class OpenGradientAnalyzer:
             # The SDK automatically handles x402 + DNS resolution (defaults to IP).
             # The SSL self-signed cert issue is fixed by the lambda patch above.
             chat_kwargs = {
-                "model": model_cid,
+                "model": model_enum,
                 "messages": messages,
                 "max_tokens": 2000,
                 "temperature": 0.1,
@@ -1132,18 +1128,13 @@ class OpenGradientAnalyzer:
                 {"role": "user", "content": input_text}
             ]
             
-            # Map SDK enum to Model ID
-            model_id_map = {
-                "GPT_4O": "openai/gpt-4o",
-                "GPT_4_1_2025_04_14": "openai/gpt-4.1-2025-04-14",
-                "O4_MINI": "openai/o4-mini",
-                "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
-                "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
-            }
-            if "/" in selected_model:
-                model_cid = selected_model  # Already a Model ID
+            # Convert model ID to og.TEE_LLM enum for SDK
+            tee_llm = getattr(og, 'TEE_LLM', None)
+            enum_name = _normalize_llm_model_enum(selected_model) or "GPT_4O"
+            if tee_llm and hasattr(tee_llm, enum_name):
+                model_enum = getattr(tee_llm, enum_name)
             else:
-                model_cid = model_id_map.get(selected_model, "openai/gpt-4o")
+                model_enum = selected_model
             
             # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
             # Use SETTLE mode for real tx hash
@@ -1153,7 +1144,7 @@ class OpenGradientAnalyzer:
             settlement_mode_name = _settlement_mode_name(settlement_mode)
             
             chat_kwargs = {
-                "model": model_cid,
+                "model": model_enum,
                 "messages": messages,
                 "max_tokens": 2000,
                 "temperature": 0.1,
