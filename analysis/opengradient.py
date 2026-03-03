@@ -374,11 +374,11 @@ def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
     """Return first model enum name available in current SDK."""
     tee_llm = getattr(og_module, "TEE_LLM", None)
     if tee_llm is None:
-        return "GPT_4O"
+        return "GPT_4_1_2025_04_14"
     for name in candidates:
         if hasattr(tee_llm, name):
             return name
-    return "GPT_4O"
+    return "GPT_4_1_2025_04_14"
 
 
 def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
@@ -664,10 +664,10 @@ class OpenGradientAnalyzer:
     # Model fallback chain — try cheaper/faster models if main one fails
     # Note: GPT_4_1_2025_04_14 is the primary supported model for x402 payments
     MODEL_FALLBACK = [
-        "CLAUDE_4_0_SONNET",
+        "CLAUDE_SONNET_4_5",
         "GPT_4_1_2025_04_14",
-        "GPT_4O",
-        "CLAUDE_3_5_HAIKU",
+        "O4_MINI",
+        "CLAUDE_HAIKU_4_5",
     ]
     REQUIRE_X402_TX = True  # Re-enable for production
 
@@ -853,7 +853,7 @@ class OpenGradientAnalyzer:
             {"role": "user", "content": input_text},
         ]
 
-        model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4O)
+        model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4_1_2025_04_14)
         settlement_mode = _resolve_settlement_mode(
             og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
         )
@@ -1092,7 +1092,7 @@ class OpenGradientAnalyzer:
             ]
             
             # Use TEE_LLM from SDK
-            model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4O)
+            model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4_1_2025_04_14)
             
             # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
             # Use SETTLE mode for real tx hash

@@ -242,29 +242,32 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         return model or None
 
     allowed_llm_models = {
-        "CLAUDE_3_5_HAIKU",
-        "CLAUDE_3_7_SONNET",
-        "CLAUDE_4_0_SONNET",
-        "GEMINI_2_0_FLASH",
-        "GEMINI_2_5_FLASH",
-        "GEMINI_2_5_FLASH_LITE",
-        "GEMINI_2_5_PRO",
-        "GPT_4O",
         "GPT_4_1_2025_04_14",
-        "GROK_2_1212",
-        "GROK_2_VISION_LATEST",
-        "GROK_3_BETA",
-        "GROK_3_MINI_BETA",
+        "O4_MINI",
+        "GPT_5",
+        "GPT_5_MINI",
+        "GPT_5_2",
+        "CLAUDE_SONNET_4_5",
+        "CLAUDE_SONNET_4_6",
+        "CLAUDE_HAIKU_4_5",
+        "CLAUDE_OPUS_4_5",
+        "CLAUDE_OPUS_4_6",
+        "GEMINI_2_5_FLASH",
+        "GEMINI_2_5_PRO",
+        "GEMINI_2_5_FLASH_LITE",
+        "GEMINI_3_PRO",
+        "GEMINI_3_FLASH",
+        "GROK_4",
+        "GROK_4_FAST",
         "GROK_4_1_FAST",
         "GROK_4_1_FAST_NON_REASONING",
-        "O4_MINI",
     }
 
     normalized_model = _normalize_llm_model(llm_model)
     if normalized_model and normalized_model not in allowed_llm_models:
         logger.warning(f"Invalid llm_model requested: {normalized_model}. Falling back to default.")
         normalized_model = None
-    effective_model = normalized_model or "CLAUDE_4_0_SONNET"
+    effective_model = normalized_model or "CLAUDE_SONNET_4_5"
     
     # Detect chain type
     chain_type = _detect_chain(contract_address or ticker)

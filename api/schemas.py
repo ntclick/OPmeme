@@ -20,7 +20,7 @@ class AnalyzeRequest(BaseModel):
 
     llm_model: Optional[str] = Field(
         None,
-        description="OpenGradient TEE_LLM model enum name (e.g. CLAUDE_4_0_SONNET). If not set, server default is used.",
+        description="OpenGradient TEE_LLM model enum name (e.g. CLAUDE_SONNET_4_5). If not set, server default is used.",
     )
 
 
