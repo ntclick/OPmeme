@@ -752,20 +752,7 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
 
-            # Configure SDK to disable SSL verification (for self-signed certs)
-            import httpx
-            import opengradient.client as og_client
-            
-            # Create custom transport with SSL verification disabled
-            transport = httpx.AsyncClient(verify=False)
-            
-            # Initialize client with custom transport
             self._client = og.Client(private_key=private_key)
-            
-            # Monkey-patch the client's HTTP client to disable SSL verification
-            if hasattr(self._client.llm, '_client'):
-                self._client.llm._client = httpx.AsyncClient(verify=False, timeout=120.0)
-            
             self._initialized = True
             
             # Ensure OPG approval before inference
@@ -958,195 +945,53 @@ class OpenGradientAnalyzer:
         verification: Optional[dict[str, Any]] = None
 
         try:
-            # Use direct HTTP calls to x402 Gateway with SSL verification disabled
-            import httpx
-            
-            url = "https://llm.opengradient.ai/v1/chat/completions"
-            headers = {
-                "Content-Type": "application/json",
-            }
-            
-            # Map settlement mode to header value
-            settlement_header = None
-            if settlement_mode is not None:
-                if "SETTLE_INDIVIDUAL_WITH_METADATA" in str(settlement_mode):
-                    settlement_header = "individual"
-                elif "SETTLE_BATCH" in str(settlement_mode):
-                    settlement_header = "batch"
-                else:
-                    settlement_header = "private"
-            
-            if settlement_header:
-                headers["X-SETTLEMENT-TYPE"] = settlement_header
-            
-            payload = {
+            # Use SDK streaming API (SDK handles x402 + DNS resolution)
+            chat_kwargs = {
                 "model": model_cid,
                 "messages": messages,
                 "max_tokens": 2000,
                 "temperature": 0.1,
                 "stream": True,
             }
-            
-            # Create HTTP client with SSL verification disabled
-            async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
-                # Step 1: Initial request to get payment requirements (402 response)
-                response = await client.post(url, headers=headers, json=payload)
-                
-                # If 402 Payment Required, we need to handle payment
-                if response.status_code == 402:
-                    # Get payment requirements from headers
-                    payment_required_b64 = response.headers.get("X-PAYMENT-REQUIRED")
-                    if payment_required_b64 and ETH_ACCOUNT_AVAILABLE:
-                        try:
-                            # Parse payment requirements
-                            payment_req_raw = base64.b64decode(payment_required_b64).decode("utf-8")
-                            payment_req = json.loads(payment_req_raw)
-                            
-                            # Get private key for signing
-                            pk = _resolve_private_key()
-                            if pk and "YOUR" not in pk:
-                                # Get chainId from network (e.g. "eip155:84532")
-                                network = str(payment_req.get("network") or "")
-                                chain_id = 84532
-                                try:
-                                    if network.startswith("eip155:"):
-                                        chain_id = int(network.split(":", 1)[1])
-                                except Exception:
-                                    chain_id = 84532
+            if settlement_mode is not None:
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-                                max_timeout = int(payment_req.get("maxTimeoutSeconds") or 300)
-                                valid_before = int(time.time()) + max_timeout
+            stream = self._client.llm.chat(**chat_kwargs)
 
-                                # nonce must be bytes32
-                                nonce = "0x" + secrets.token_bytes(32).hex()
+            for chunk in stream:
+                tx_hash = _extract_tx_hash(chunk) or tx_hash
+                payment_hash = _extract_payment_hash(chunk) or payment_hash
+                verification = _extract_verification(chunk) or verification
 
-                                # Get authorization parameters
-                                auth = {
-                                    "from": Account.from_key(pk).address,
-                                    "to": payment_req.get("payTo", "0x339c7de83d1a62edafbaac186382ee76584d294f"),
-                                    "value": str(payment_req.get("maxAmountRequired") or "1000000"),
-                                    "validAfter": 0,
-                                    "validBefore": valid_before,
-                                    "nonce": nonce,
-                                }
-                                
-                                extra = payment_req.get("extra") or {}
-
-                                # EIP-712 domain from docs
-                                domain = {
-                                    "name": str(extra.get("name") or "OPG"),
-                                    "version": str(extra.get("version") or "1"),
-                                    "chainId": chain_id,
-                                    "verifyingContract": payment_req.get(
-                                        "asset",
-                                        "0x240b09731D96979f50B2C649C9CE10FcF9C7987F",
-                                    ),
-                                }
-                                
-                                types = {
-                                    "EIP712Domain": [
-                                        {"name": "name", "type": "string"},
-                                        {"name": "version", "type": "string"},
-                                        {"name": "chainId", "type": "uint256"},
-                                        {"name": "verifyingContract", "type": "address"},
-                                    ],
-                                    "TransferWithAuthorization": [
-                                        {"name": "from", "type": "address"},
-                                        {"name": "to", "type": "address"},
-                                        {"name": "value", "type": "uint256"},
-                                        {"name": "validAfter", "type": "uint256"},
-                                        {"name": "validBefore", "type": "uint256"},
-                                        {"name": "nonce", "type": "bytes32"},
-                                    ],
-                                }
-                                
-                                message = {
-                                    "from": auth["from"],
-                                    "to": auth["to"],
-                                    "value": int(auth["value"]),
-                                    "validAfter": auth["validAfter"],
-                                    "validBefore": auth["validBefore"],
-                                    "nonce": auth["nonce"],
-                                }
-                                
-                                # Sign the EIP-712 typed data
-                                signable_message = encode_typed_data(domain, types, message)
-                                signed = Account.from_key(pk).sign_message(signable_message)
-                                signature = signed.signature.hex()
-                                
-                                # Create payment payload with signature
-                                payment_payload = {
-                                    "payload": {
-                                        "signature": signature,
-                                        "authorization": auth,
-                                    }
-                                }
-                                
-                                logger.info(f"x402 payment signed for {auth['value']} OPG from {auth['from'][:8]}...")
-                                
-                                # Encode and add X-PAYMENT header
-                                payment_b64 = base64.b64encode(json.dumps(payment_payload).encode()).decode()
-                                headers["X-PAYMENT"] = payment_b64
-                                
-                                # Retry with payment
-                                response = await client.post(url, headers=headers, json=payload)
-                                logger.info("x402 payment submitted, retrying request")
-                            else:
-                                logger.warning("No valid private key for x402 payment")
-                        except Exception as e:
-                            logger.warning(f"x402 payment signing failed: {e}")
-                    else:
-                        logger.warning("x402 payment required but web3 not available - trying non-streaming")
-                        payload["stream"] = False
-                        response = await client.post(url, headers=headers, json=payload)
-                
-                response.raise_for_status()
-                
-                # Handle streaming response
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
+                try:
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
                         continue
-                    
-                    data_str = line[len("data: "):]
-                    if data_str == "[DONE]":
-                        break
-                    
+                    delta = getattr(choices[0], "delta", None)
+                    content = getattr(delta, "content", None) if delta is not None else None
+                except Exception:
+                    continue
+
+                if not content or not isinstance(content, str):
+                    continue
+
+                if content.startswith("__OG_META__"):
                     try:
-                        chunk = json.loads(data_str)
-                        
-                        tx_hash = _extract_tx_hash(chunk) or tx_hash
-                        payment_hash = _extract_payment_hash(chunk) or payment_hash
-                        verification = _extract_verification(chunk) or verification
-                        
-                        choices = chunk.get("choices", [])
-                        if not choices:
-                            continue
-                        
-                        delta = choices[0].get("delta", {})
-                        content = delta.get("content")
-                        
-                        if not content or not isinstance(content, str):
-                            continue
-                        
-                        if content.startswith("__OG_META__"):
-                            try:
-                                meta = json.loads(content[len("__OG_META__"):])
-                                tx_hash = _extract_tx_hash(meta) or tx_hash
-                                payment_hash = meta.get("payment_hash") or payment_hash
-                                verification = _extract_verification(meta) or verification
-                                yield {
-                                    "type": "meta",
-                                    "tx_hash": tx_hash,
-                                    "payment_hash": payment_hash,
-                                    "verification": verification,
-                                }
-                            except Exception:
-                                pass
-                            continue
-                        
-                        raw_parts.append(content)
-                    except json.JSONDecodeError:
-                        continue
+                        meta = json.loads(content[len("__OG_META__"):])
+                        tx_hash = _extract_tx_hash(meta) or tx_hash
+                        payment_hash = meta.get("payment_hash") or payment_hash
+                        verification = _extract_verification(meta) or verification
+                        yield {
+                            "type": "meta",
+                            "tx_hash": tx_hash,
+                            "payment_hash": payment_hash,
+                            "verification": verification,
+                        }
+                    except Exception:
+                        pass
+                    continue
+
+                raw_parts.append(content)
                         
         except Exception as e:
             stream_error = str(e)
