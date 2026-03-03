@@ -990,16 +990,7 @@ class OpenGradientAnalyzer:
             # Create HTTP client with SSL verification disabled
             async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
                 # Step 1: Initial request to get payment requirements (402 response)
-                try:
-                    response = await client.post(url, headers=headers, json=payload)
-                except Exception as e:
-                    # DNS failures can occur in some containers: fall back to IP but keep Host for TLS SNI
-                    if "No address associated with hostname" in str(e) or "[Errno -5]" in str(e):
-                        url = "https://3.15.214.21/v1/chat/completions"
-                        headers["Host"] = "llm.opengradient.ai"
-                        response = await client.post(url, headers=headers, json=payload)
-                    else:
-                        raise
+                response = await client.post(url, headers=headers, json=payload)
                 
                 # If 402 Payment Required, we need to handle payment
                 if response.status_code == 402:
