@@ -18,18 +18,19 @@ import threading
 import ssl
 import certifi
 import base64
+import time
+import secrets
 from pathlib import Path
 from typing import Optional, Any, List, AsyncGenerator
 import uuid
 
-# web3 for x402 payment signing
+# x402 payment signing
 try:
-    from web3 import Web3
     from eth_account import Account
-    from eth_account.messages import encode_defunct
-    WEB3_AVAILABLE = True
+    from eth_account.messages import encode_typed_data
+    ETH_ACCOUNT_AVAILABLE = True
 except ImportError:
-    WEB3_AVAILABLE = False
+    ETH_ACCOUNT_AVAILABLE = False
 
 # Disable SSL verification for self-signed certificates
 os.environ['PYTHONHTTPSVERIFY'] = '0'
@@ -989,38 +990,66 @@ class OpenGradientAnalyzer:
             # Create HTTP client with SSL verification disabled
             async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
                 # Step 1: Initial request to get payment requirements (402 response)
-                response = await client.post(url, headers=headers, json=payload)
+                try:
+                    response = await client.post(url, headers=headers, json=payload)
+                except Exception as e:
+                    # DNS failures can occur in some containers: fall back to IP but keep Host for TLS SNI
+                    if "No address associated with hostname" in str(e) or "[Errno -5]" in str(e):
+                        url = "https://3.15.214.21/v1/chat/completions"
+                        headers["Host"] = "llm.opengradient.ai"
+                        response = await client.post(url, headers=headers, json=payload)
+                    else:
+                        raise
                 
                 # If 402 Payment Required, we need to handle payment
                 if response.status_code == 402:
                     # Get payment requirements from headers
                     payment_required_b64 = response.headers.get("X-PAYMENT-REQUIRED")
-                    if payment_required_b64 and WEB3_AVAILABLE:
+                    if payment_required_b64 and ETH_ACCOUNT_AVAILABLE:
                         try:
                             # Parse payment requirements
-                            import base64
-                            payment_req = json.loads(base64.b64decode(payment_required_b64))
+                            payment_req_raw = base64.b64decode(payment_required_b64).decode("utf-8")
+                            payment_req = json.loads(payment_req_raw)
                             
                             # Get private key for signing
                             pk = _resolve_private_key()
                             if pk and "YOUR" not in pk:
+                                # Get chainId from network (e.g. "eip155:84532")
+                                network = str(payment_req.get("network") or "")
+                                chain_id = 84532
+                                try:
+                                    if network.startswith("eip155:"):
+                                        chain_id = int(network.split(":", 1)[1])
+                                except Exception:
+                                    chain_id = 84532
+
+                                max_timeout = int(payment_req.get("maxTimeoutSeconds") or 300)
+                                valid_before = int(time.time()) + max_timeout
+
+                                # nonce must be bytes32
+                                nonce = "0x" + secrets.token_bytes(32).hex()
+
                                 # Get authorization parameters
                                 auth = {
                                     "from": Account.from_key(pk).address,
                                     "to": payment_req.get("payTo", "0x339c7de83d1a62edafbaac186382ee76584d294f"),
-                                    "value": payment_req.get("maxAmountRequired", "1000000"),
+                                    "value": str(payment_req.get("maxAmountRequired") or "1000000"),
                                     "validAfter": 0,
-                                    "validBefore": int(asyncio.get_event_loop().time()) + 300,
-                                    "nonce": "0x" + uuid.uuid4().hex[:32],
+                                    "validBefore": valid_before,
+                                    "nonce": nonce,
                                 }
                                 
-                                # Create EIP-712 typed data structure for Permit2/transferWithAuthorization
-                                # This is the standard structure for USDC/EIP-3009 style authorizations
+                                extra = payment_req.get("extra") or {}
+
+                                # EIP-712 domain from docs
                                 domain = {
-                                    "name": "USD Coin",
-                                    "version": "2",
-                                    "chainId": 84532,  # Base Sepolia
-                                    "verifyingContract": "0x240b09731D96979f50B2C649C9CE10FcF9C7987F",  # OPG token
+                                    "name": str(extra.get("name") or "OPG"),
+                                    "version": str(extra.get("version") or "1"),
+                                    "chainId": chain_id,
+                                    "verifyingContract": payment_req.get(
+                                        "asset",
+                                        "0x240b09731D96979f50B2C649C9CE10FcF9C7987F",
+                                    ),
                                 }
                                 
                                 types = {
@@ -1050,7 +1079,6 @@ class OpenGradientAnalyzer:
                                 }
                                 
                                 # Sign the EIP-712 typed data
-                                from eth_account.messages import encode_typed_data
                                 signable_message = encode_typed_data(domain, types, message)
                                 signed = Account.from_key(pk).sign_message(signable_message)
                                 signature = signed.signature.hex()
