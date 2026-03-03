@@ -51,21 +51,6 @@ else:
 
 import opengradient as og
 
-# ── Fix [SSL: CERTIFICATE_VERIFY_FAILED] on Railway/Docker ──────────────────
-# The OpenGradient SDK attempts to fetch and pin a self-signed TEE cert using
-# Trust On First Use (TOFU). On Railway, this fetch can timeout or return a
-# mismatched certificate context, causing all subsequent SDK calls to fail.
-# Rather than trying to hack the SDK's internal _tls_verify, we directly
-# monkey-patch httpx itself. This definitively suppresses the SSL error.
-import httpx
-_orig_async_client_init = httpx.AsyncClient.__init__
-
-def _patched_async_client_init(self, *args, **kwargs):
-    kwargs["verify"] = False
-    _orig_async_client_init(self, *args, **kwargs)
-
-httpx.AsyncClient.__init__ = _patched_async_client_init
-
 
 
 from langchain_core.tools import tool
@@ -763,19 +748,15 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
 
-            self._client = og.Client(private_key=private_key)
+            # Use official endpoint https://llm.opengradient.ai (valid CA cert)
+            # instead of SDK default IP 3.15.214.21 (self-signed cert → SSL error)
+            OG_LLM_URL = "https://llm.opengradient.ai"
+            self._client = og.Client(
+                private_key=private_key,
+                og_llm_server_url=OG_LLM_URL,
+                og_llm_streaming_server_url=OG_LLM_URL,
+            )
             self._initialized = True
-
-            # ── Fix SSL: force verify=False and rebuild HTTP clients ──
-            # SDK's TOFU cert pinning (_fetch_tls_cert_as_ssl_context) often
-            # returns a broken SSLContext on Railway/Docker, causing
-            # [SSL: CERTIFICATE_VERIFY_FAILED].  TEE hardware attestation
-            # provides the real security, so TLS cert check is redundant.
-            _llm = self._client.llm
-            _llm._tls_verify = False
-            _llm._streaming_tls_verify = False
-            _llm._run_coroutine(_llm._close_http_clients())
-            _llm._run_coroutine(_llm._initialize_http_clients())
             
             # Ensure OPG approval before inference
             try:
