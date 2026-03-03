@@ -393,9 +393,9 @@ def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
     
-    model = str(value).strip()
+    model = str(value).strip().lower()
     
-    # Map from OpenGradient Model ID format to SDK enum name
+    # Map from OpenGradient Model ID format (lowercase) to SDK enum name
     model_id_to_enum = {
         # OpenAI models
         "openai/gpt-4o": "GPT_4O",
@@ -414,12 +414,13 @@ def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
         "x-ai/grok-3-mini-beta": "GROK_3_MINI_BETA",
     }
     
-    # If it's already an SDK enum (no slash), return uppercase
+    # If it's already an SDK enum (no slash), return as-is (uppercase)
     if "/" not in model:
+        # It's an SDK enum name, return it uppercased
         return model.upper()
     
     # Map from Model ID to SDK enum
-    return model_id_to_enum.get(model, model.upper())
+    return model_id_to_enum.get(model, "GPT_4O")  # Default fallback
 
 
 def _has_real_tx_hash(tx_hash: Any) -> bool:
