@@ -29,6 +29,14 @@ os.environ['REQUESTS_CA_BUNDLE'] = ''
 # Create SSL context that doesn't verify certificates
 ssl._create_default_https_context = ssl._create_unverified_context
 
+# Patch httpx globally to disable SSL verification
+import httpx
+original_async_client_init = httpx.AsyncClient.__init__
+def patched_async_client_init(self, *args, **kwargs):
+    kwargs['verify'] = False
+    return original_async_client_init(self, *args, **kwargs)
+httpx.AsyncClient.__init__ = patched_async_client_init
+
 # NOTE: DNS resolution and SSL handled by system - no custom patching needed
 
 # Set Firebase API Key for OpenGradient SDK if provided
