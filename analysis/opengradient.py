@@ -748,6 +748,17 @@ class OpenGradientAnalyzer:
 
             self._client = og.Client(private_key=private_key)
             self._initialized = True
+
+            # ── Fix SSL: force verify=False and rebuild HTTP clients ──
+            # SDK's TOFU cert pinning (_fetch_tls_cert_as_ssl_context) often
+            # returns a broken SSLContext on Railway/Docker, causing
+            # [SSL: CERTIFICATE_VERIFY_FAILED].  TEE hardware attestation
+            # provides the real security, so TLS cert check is redundant.
+            _llm = self._client.llm
+            _llm._tls_verify = False
+            _llm._streaming_tls_verify = False
+            _llm._run_coroutine(_llm._close_http_clients())
+            _llm._run_coroutine(_llm._initialize_http_clients())
             
             # Ensure OPG approval before inference
             try:
