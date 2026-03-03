@@ -9,5 +9,5 @@ pydantic>=2.9.2
 python-dotenv>=1.0.1
 jinja2>=3.1.0
 langchain
-opengradient==0.7.0
+opengradient==0.7.1
 certifi
