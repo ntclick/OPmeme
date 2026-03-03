@@ -24,6 +24,10 @@ from pathlib import Path
 from typing import Optional, Any, List, AsyncGenerator
 import uuid
 
+# Force certifi CA bundle for Railway free plan (missing system CA)
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
 # x402 payment signing
 try:
     from eth_account import Account
@@ -31,9 +35,6 @@ try:
     ETH_ACCOUNT_AVAILABLE = True
 except ImportError:
     ETH_ACCOUNT_AVAILABLE = False
-
-# Ensure proper SSL verification with certifi
-ssl_context = ssl.create_default_context(cafile=certifi.where())
 
 # Set Firebase API Key for OpenGradient SDK if provided
 from config import OPENGRADIENT_FIREBASE_API_KEY
