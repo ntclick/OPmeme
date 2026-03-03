@@ -731,7 +731,20 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
 
+            # Configure SDK to disable SSL verification (for self-signed certs)
+            import httpx
+            import opengradient.client as og_client
+            
+            # Create custom transport with SSL verification disabled
+            transport = httpx.AsyncClient(verify=False)
+            
+            # Initialize client with custom transport
             self._client = og.Client(private_key=private_key)
+            
+            # Monkey-patch the client's HTTP client to disable SSL verification
+            if hasattr(self._client.llm, '_client'):
+                self._client.llm._client = httpx.AsyncClient(verify=False, timeout=120.0)
+            
             self._initialized = True
             
             # Ensure OPG approval before inference
