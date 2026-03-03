@@ -984,7 +984,12 @@ class OpenGradientAnalyzer:
                 chat_payload["x402_settlement_mode"] = settlement_mode
 
             x402_cl = getattr(self._client.llm, "_x402_client", None)
-            transport = x402AsyncTransport(x402_cl, verify=True) if x402_cl else None
+            # x402AsyncTransport older versions don't have `verify` param.
+            # llm.opengradient.ai has a valid TLS cert so default verify=True is correct.
+            try:
+                transport = x402AsyncTransport(x402_cl, verify=True) if x402_cl else None
+            except TypeError:
+                transport = x402AsyncTransport(x402_cl) if x402_cl else None
 
             url = "https://llm.opengradient.ai/v1/chat/completions"
             async with httpx.AsyncClient(transport=transport, timeout=120.0) as http_client:
