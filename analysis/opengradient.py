@@ -965,8 +965,15 @@ class OpenGradientAnalyzer:
         verification: Optional[dict[str, Any]] = None
 
         try:
-            # Use SDK streaming API (SDK handles x402 + DNS resolution)
-            chat_kwargs = {
+            # ── Direct HTTP call to official x402 Gateway ──────────────────
+
+            # https://docs.opengradient.ai/developers/x402/api-reference.html
+            # Use llm.opengradient.ai which has a proper TLS cert (no SSL error).
+            # x402AsyncTransport handles the 402 Payment Required / signing flow.
+            import httpx
+            from x402v2.http.clients.httpx import x402AsyncTransport
+
+            chat_payload: dict = {
                 "model": model_cid,
                 "messages": messages,
                 "max_tokens": 2000,
@@ -974,47 +981,55 @@ class OpenGradientAnalyzer:
                 "stream": True,
             }
             if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
+                chat_payload["x402_settlement_mode"] = settlement_mode
 
-            stream = self._client.llm.chat(**chat_kwargs)
+            x402_cl = getattr(self._client.llm, "_x402_client", None)
+            transport = x402AsyncTransport(x402_cl, verify=True) if x402_cl else None
 
-            for chunk in stream:
-                tx_hash = _extract_tx_hash(chunk) or tx_hash
-                payment_hash = _extract_payment_hash(chunk) or payment_hash
-                verification = _extract_verification(chunk) or verification
+            url = "https://llm.opengradient.ai/v1/chat/completions"
+            async with httpx.AsyncClient(transport=transport, timeout=120.0) as http_client:
+                async with http_client.stream("POST", url, json=chat_payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[len("data: "):]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            tx_hash = _extract_tx_hash(chunk) or tx_hash
+                            payment_hash = _extract_payment_hash(chunk) or payment_hash
+                            verification = _extract_verification(chunk) or verification
+                            choices = chunk.get("choices", [])
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content")
+                            if not content or not isinstance(content, str):
+                                continue
+                            if content.startswith("__OG_META__"):
+                                try:
+                                    meta = json.loads(content[len("__OG_META__"):])
+                                    tx_hash = _extract_tx_hash(meta) or tx_hash
+                                    payment_hash = meta.get("payment_hash") or payment_hash
+                                    verification = _extract_verification(meta) or verification
+                                    yield {
+                                        "type": "meta",
+                                        "tx_hash": tx_hash,
+                                        "payment_hash": payment_hash,
+                                        "verification": verification,
+                                    }
+                                except Exception:
+                                    pass
+                                continue
+                            raw_parts.append(content)
+                        except json.JSONDecodeError:
+                            continue
 
-                try:
-                    choices = getattr(chunk, "choices", None)
-                    if not choices:
-                        continue
-                    delta = getattr(choices[0], "delta", None)
-                    content = getattr(delta, "content", None) if delta is not None else None
-                except Exception:
-                    continue
-
-                if not content or not isinstance(content, str):
-                    continue
-
-                if content.startswith("__OG_META__"):
-                    try:
-                        meta = json.loads(content[len("__OG_META__"):])
-                        tx_hash = _extract_tx_hash(meta) or tx_hash
-                        payment_hash = meta.get("payment_hash") or payment_hash
-                        verification = _extract_verification(meta) or verification
-                        yield {
-                            "type": "meta",
-                            "tx_hash": tx_hash,
-                            "payment_hash": payment_hash,
-                            "verification": verification,
-                        }
-                    except Exception:
-                        pass
-                    continue
-
-                raw_parts.append(content)
-                        
         except Exception as e:
             stream_error = str(e)
+
             
         raw_output = "".join(raw_parts)
 
