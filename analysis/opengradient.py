@@ -758,21 +758,17 @@ class OpenGradientAnalyzer:
             )
             self._initialized = True
             
-            # Ensure OPG approval before inference
+            # Ensure OPG approval before inference (SDK 0.7.1+ only)
             try:
-                logger.info("🔍 Checking OPG approval...")
-                
-                # Use client.llm.ensure_opg_approval directly (preferred method)
-                try:
+                if hasattr(self._client, 'llm') and hasattr(self._client.llm, 'ensure_opg_approval'):
                     logger.info("🔍 Checking OPG approval via client.llm...")
                     approval = self._client.llm.ensure_opg_approval(opg_amount=420.0)
                     if approval.tx_hash:
                         logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
                     else:
                         logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Permit2 approval failed: {e}")
-                    
+                else:
+                    logger.info("ℹ️ ensure_opg_approval not available in this SDK version, skipping")
             except Exception as e:
                 logger.warning(f"⚠️ Permit2 approval failed: {e}")
 
