@@ -473,8 +473,17 @@ class SafeOpenGradientLLM(BaseChatModel):
         # 3. Call SDK synchronously
         try:
             settlement_mode = _resolve_settlement_mode(og.x402SettlementMode, require_onchain=False)
+            # Map model enum to Model ID
+            model_id_map = {
+                "GPT_4O": "openai/gpt-4o",
+                "GPT_4_1_2025_04_14": "openai/gpt-4.1-2025-04-14",
+                "O4_MINI": "openai/o4-mini",
+                "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
+                "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
+            }
+            model_cid = model_id_map.get(self.model_enum, "openai/gpt-4o")
             chat_kwargs = {
-                "model": getattr(og.TEE_LLM, self.model_enum),
+                "model": model_cid,
                 "messages": formatted_msgs,
                 "max_tokens": 800,
                 "temperature": 0.3,
@@ -888,8 +897,21 @@ class OpenGradientAnalyzer:
             {"role": "user", "content": input_text},
         ]
 
-        # Use SDK model enum directly
-        model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4O)
+        # Use model ID directly - x402 Gateway accepts Model ID strings
+        # Map SDK enum names back to Model IDs if needed
+        model_id_map = {
+            "GPT_4O": "openai/gpt-4o",
+            "GPT_4_1_2025_04_14": "openai/gpt-4.1-2025-04-14",
+            "O4_MINI": "openai/o4-mini",
+            "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
+            "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
+        }
+        
+        # Use Model ID directly (either from mapping or pass through)
+        if "/" in selected_model:
+            model_cid = selected_model  # Already a Model ID
+        else:
+            model_cid = model_id_map.get(selected_model, "openai/gpt-4o")
         settlement_mode = _resolve_settlement_mode(
             og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
         )
@@ -1093,8 +1115,18 @@ class OpenGradientAnalyzer:
                 {"role": "user", "content": input_text}
             ]
             
-            # Use TEE_LLM from SDK
-            model_cid = getattr(og.TEE_LLM, selected_model, og.TEE_LLM.GPT_4_1_2025_04_14)
+            # Map SDK enum to Model ID
+            model_id_map = {
+                "GPT_4O": "openai/gpt-4o",
+                "GPT_4_1_2025_04_14": "openai/gpt-4.1-2025-04-14",
+                "O4_MINI": "openai/o4-mini",
+                "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
+                "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
+            }
+            if "/" in selected_model:
+                model_cid = selected_model  # Already a Model ID
+            else:
+                model_cid = model_id_map.get(selected_model, "openai/gpt-4o")
             
             # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
             # Use SETTLE mode for real tx hash
