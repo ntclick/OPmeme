@@ -34,6 +34,17 @@ else:
         model_hub._FIREBASE_CONFIG = {}
 
 import opengradient as og
+import x402v2.http.clients.httpx
+
+# Monkey-patch x402HttpxClient to disable SSL verification (required for self-signed TEE nodes)
+_orig_x402_init = x402v2.http.clients.httpx.x402HttpxClient.__init__
+
+def _patched_x402_init(self, x402_client, **kwargs):
+    kwargs["verify"] = False
+    _orig_x402_init(self, x402_client, **kwargs)
+
+x402v2.http.clients.httpx.x402HttpxClient.__init__ = _patched_x402_init
+
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models.chat_models import BaseChatModel
