@@ -384,10 +384,42 @@ def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
 
 
 def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
+    """Normalize model ID to SDK enum name.
+    
+    Handles both formats:
+    - SDK enum: "GPT_4O" → "GPT_4O"
+    - Model ID: "openai/gpt-4o" → "GPT_4O"
+    """
     if not value:
         return None
-    model = str(value).strip().upper()
-    return model or None
+    
+    model = str(value).strip()
+    
+    # Map from OpenGradient Model ID format to SDK enum name
+    model_id_to_enum = {
+        # OpenAI models
+        "openai/gpt-4o": "GPT_4O",
+        "openai/gpt-4.1-2025-04-14": "GPT_4_1_2025_04_14",
+        "openai/o4-mini": "O4_MINI",
+        # Anthropic models
+        "anthropic/claude-3.5-haiku": "CLAUDE_3_5_HAIKU",
+        "anthropic/claude-4.0-sonnet": "CLAUDE_SONNET_4_5",
+        "anthropic/claude-3.7-sonnet": "CLAUDE_3_7_SONNET",
+        # Google models
+        "google/gemini-2.5-flash": "GEMINI_2_5_FLASH",
+        "google/gemini-2.5-pro": "GEMINI_2_5_PRO",
+        "google/gemini-2.0-flash": "GEMINI_2_0_FLASH",
+        # xAI models
+        "x-ai/grok-3-beta": "GROK_3_BETA",
+        "x-ai/grok-3-mini-beta": "GROK_3_MINI_BETA",
+    }
+    
+    # If it's already an SDK enum (no slash), return uppercase
+    if "/" not in model:
+        return model.upper()
+    
+    # Map from Model ID to SDK enum
+    return model_id_to_enum.get(model, model.upper())
 
 
 def _has_real_tx_hash(tx_hash: Any) -> bool:
