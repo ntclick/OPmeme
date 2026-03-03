@@ -770,6 +770,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         ai_error = ai_result.get("error") if isinstance(ai_result, dict) else None
         if ai_error:
             logger.error(f"❌ OpenGradient error: {ai_error}")
+            raise HTTPException(status_code=502, detail=f"OpenGradient AI processing failed: {ai_error}")
         ai_trust_score = None
         ai_inference_success = False
         tx_hash = None
