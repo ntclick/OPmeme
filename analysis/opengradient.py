@@ -49,21 +49,36 @@ else:
 
 import opengradient as og
 
+# ── NUCLEAR SSL BYPASS for Railway ────────────────────────────────────────────
+# The OpenGradient SDK connects to TEE nodes via IP (3.15.214.21) which uses
+# a self-signed certificate. The SDK creates its own ssl.SSLContext internally,
+# so httpx-level patches (verify=False) are overridden. We must patch at the
+# Python ssl module level to ensure ALL SSL contexts skip cert verification.
+# TEE attestation provides the actual security guarantee, not TLS certs.
 import httpx
 
-# Patch AsyncClient
-_orig_async_client_init = httpx.AsyncClient.__init__
-def _patched_async_client_init(self, *args, **kwargs):
-    kwargs["verify"] = False
-    _orig_async_client_init(self, *args, **kwargs)
-httpx.AsyncClient.__init__ = _patched_async_client_init
+_orig_create_default_context = ssl.create_default_context
 
-# Patch Sync Client
-_orig_sync_client_init = httpx.Client.__init__
-def _patched_sync_client_init(self, *args, **kwargs):
+def _insecure_create_default_context(*args, **kwargs):
+    ctx = _orig_create_default_context(*args, **kwargs)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+ssl.create_default_context = _insecure_create_default_context
+
+# Also patch httpx clients for completeness
+_orig_async_init = httpx.AsyncClient.__init__
+def _patched_async_init(self, *args, **kwargs):
     kwargs["verify"] = False
-    _orig_sync_client_init(self, *args, **kwargs)
-httpx.Client.__init__ = _patched_sync_client_init
+    _orig_async_init(self, *args, **kwargs)
+httpx.AsyncClient.__init__ = _patched_async_init
+
+_orig_sync_init = httpx.Client.__init__
+def _patched_sync_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _orig_sync_init(self, *args, **kwargs)
+httpx.Client.__init__ = _patched_sync_init
 
 
 
