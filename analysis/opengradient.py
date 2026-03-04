@@ -24,9 +24,7 @@ from pathlib import Path
 from typing import Optional, Any, List, AsyncGenerator
 import uuid
 
-# Force certifi CA bundle for Railway free plan (missing system CA)
-os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
 
 # x402 payment signing
 try:
@@ -51,21 +49,7 @@ else:
 
 import opengradient as og
 
-# ── Fix [SSL: CERTIFICATE_VERIFY_FAILED] & [Errno -5] on Railway ─────────────
-# Railway DNS fails to resolve llm.opengradient.ai ([Errno -5]).
-# If we fall back to the SDK's default IP (3.15.214.21), we get SSL errors 
-# because of the self-signed cert and the SDK's TOFU pinning.
-# Solution: Use the default IP (bypasses DNS) AND monkey-patch httpx
-# to disable SSL verification (bypasses SSL error). TEE attestation
-# provides the actual security layer.
-import httpx
-_orig_async_client_init = httpx.AsyncClient.__init__
 
-def _patched_async_client_init(self, *args, **kwargs):
-    kwargs["verify"] = False
-    _orig_async_client_init(self, *args, **kwargs)
-
-httpx.AsyncClient.__init__ = _patched_async_client_init
 
 
 from langchain_core.tools import tool
@@ -945,54 +929,31 @@ class OpenGradientAnalyzer:
         verification: Optional[dict[str, Any]] = None
 
         try:
-            # SDK streaming (matching og-chat-backend reference style)
+            # Match og-chat-backend exactly: Local client, no stream, no settlement mode
+            private_key = _resolve_private_key()
+            client = og.Client(private_key=private_key)
+            
             chat_kwargs = {
                 "model": model_str,
                 "messages": messages,
                 "max_tokens": 2000,
                 "temperature": 0.1,
-                "stream": True,
             }
-            if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            stream = self._client.llm.chat(**chat_kwargs)
-
-            for chunk in stream:
-                tx_hash = _extract_tx_hash(chunk) or tx_hash
-                payment_hash = _extract_payment_hash(chunk) or payment_hash
-                verification = _extract_verification(chunk) or verification
-
-                try:
-                    choices = getattr(chunk, "choices", None)
-                    if not choices:
-                        continue
-                    delta = getattr(choices[0], "delta", None)
-                    content = getattr(delta, "content", None) if delta is not None else None
-                except Exception:
-                    continue
-
-                if not content or not isinstance(content, str):
-                    continue
-
-                if content.startswith("__OG_META__"):
-                    try:
-                        meta = json.loads(content[len("__OG_META__"):])
-                        tx_hash = _extract_tx_hash(meta) or tx_hash
-                        payment_hash = meta.get("payment_hash") or payment_hash
-                        verification = _extract_verification(meta) or verification
-                        yield {
-                            "type": "meta",
-                            "tx_hash": tx_hash,
-                            "payment_hash": payment_hash,
-                            "verification": verification,
-                        }
-                    except Exception:
-                        pass
-                    continue
-
-                raw_parts.append(content)
-                        
+            result = client.llm.chat(**chat_kwargs)
+            
+            content = getattr(result.chat_output, "content", None)
+            if isinstance(result.chat_output, dict):
+                content = result.chat_output.get("content")
+                
+            tx_hash = getattr(result, 'tee_signature', None)
+            
+            raw_parts.append(content or "")
+            
+            # Yield the entire block at once for the frontend
+            if content:
+                yield {"type": "chunk", "content": content}
+                
         except Exception as e:
             stream_error = str(e)
 
@@ -1134,11 +1095,9 @@ class OpenGradientAnalyzer:
             # Pass model as string directly (like og-chat-backend reference)
             model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
             
-            # Use client.llm.chat() - SDK 0.7.5 accepts model ID strings
-            settlement_mode = _resolve_settlement_mode(
-                og.x402SettlementMode, require_onchain=False
-            )
-            settlement_mode_name = _settlement_mode_name(settlement_mode)
+            # Match og-chat-backend exactly: Local client
+            private_key = _resolve_private_key()
+            client = og.Client(private_key=private_key)
             
             chat_kwargs = {
                 "model": model_str,
@@ -1146,10 +1105,8 @@ class OpenGradientAnalyzer:
                 "max_tokens": 2000,
                 "temperature": 0.1,
             }
-            if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            completion = self._client.llm.chat(**chat_kwargs)
+            completion = client.llm.chat(**chat_kwargs)
             
             # Extract from completion object
             tx_hash = _extract_tx_hash(completion)
