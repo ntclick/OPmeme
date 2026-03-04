@@ -726,15 +726,14 @@ class OpenGradientAnalyzer:
         3. Fund wallet with $OPG from https://faucet.opengradient.ai
     """
 
-    # Model fallback chain — try cheaper/faster models if main one fails
-    # Using og.TEE_LLM enum values from OpenGradient SDK
+    # Model fallback chain (model ID strings, matching docs)
     MODEL_FALLBACK = [
-        "GPT_4O",
-        "GPT_4_1_2025_04_14",
-        "CLAUDE_3_5_HAIKU",
-        "CLAUDE_4_0_SONNET",
+        "openai/gpt-4o",
+        "openai/gpt-4.1-2025-04-14",
+        "anthropic/claude-3.5-haiku",
+        "anthropic/claude-4.0-sonnet",
     ]
-    REQUIRE_X402_TX = False  # Disabled due to SSL certificate issues
+    DEFAULT_MODEL = "openai/gpt-4o"
 
     def __init__(self):
         self._client = None
@@ -921,15 +920,11 @@ class OpenGradientAnalyzer:
             {"role": "user", "content": input_text},
         ]
 
-        # Convert model ID to og.TEE_LLM enum for SDK
-        tee_llm = getattr(og, 'TEE_LLM', None)
-        enum_name = _normalize_llm_model_enum(selected_model) or "GPT_4O"
-        if tee_llm and hasattr(tee_llm, enum_name):
-            model_enum = getattr(tee_llm, enum_name)
-        else:
-            model_enum = selected_model  # Pass through as string fallback
+        # Pass model as string directly (like og-chat-backend reference)
+        # SDK 0.7.5 accepts model ID strings: "openai/gpt-4o"
+        model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
         settlement_mode = _resolve_settlement_mode(
-            og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
+            og.x402SettlementMode, require_onchain=False
         )
         settlement_mode_name = _settlement_mode_name(settlement_mode)
 
@@ -940,11 +935,9 @@ class OpenGradientAnalyzer:
         verification: Optional[dict[str, Any]] = None
 
         try:
-            # Use SDK streaming API directly.
-            # The SDK automatically handles x402 + DNS resolution (defaults to IP).
-            # The SSL self-signed cert issue is fixed by the lambda patch above.
+            # SDK streaming (matching og-chat-backend reference style)
             chat_kwargs = {
-                "model": model_enum,
+                "model": model_str,
                 "messages": messages,
                 "max_tokens": 2000,
                 "temperature": 0.1,
@@ -1128,23 +1121,17 @@ class OpenGradientAnalyzer:
                 {"role": "user", "content": input_text}
             ]
             
-            # Convert model ID to og.TEE_LLM enum for SDK
-            tee_llm = getattr(og, 'TEE_LLM', None)
-            enum_name = _normalize_llm_model_enum(selected_model) or "GPT_4O"
-            if tee_llm and hasattr(tee_llm, enum_name):
-                model_enum = getattr(tee_llm, enum_name)
-            else:
-                model_enum = selected_model
+            # Pass model as string directly (like og-chat-backend reference)
+            model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
             
-            # NEW SDK API: Use client.llm.chat() instead of og.llm_chat()
-            # Use SETTLE mode for real tx hash
+            # Use client.llm.chat() - SDK 0.7.5 accepts model ID strings
             settlement_mode = _resolve_settlement_mode(
-                og.x402SettlementMode, require_onchain=bool(self.REQUIRE_X402_TX)
+                og.x402SettlementMode, require_onchain=False
             )
             settlement_mode_name = _settlement_mode_name(settlement_mode)
             
             chat_kwargs = {
-                "model": model_enum,
+                "model": model_str,
                 "messages": messages,
                 "max_tokens": 2000,
                 "temperature": 0.1,
