@@ -980,7 +980,9 @@ class OpenGradientAnalyzer:
                 
             tx_hash = _extract_tx_hash(result.payment_response if hasattr(result, "payment_response") else result)
             payment_hash = getattr(result, "payment_hash", None)
-            verification = getattr(result, "tee_signature", None)
+            tee_sig = getattr(result, "tee_signature", None)
+            tee_ts = getattr(result, "tee_timestamp", None)
+            verification = {"tee_signature": tee_sig, "tee_timestamp": tee_ts} if tee_sig else None
             
             raw_parts.append(content or "")
             
