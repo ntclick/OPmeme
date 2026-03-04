@@ -757,12 +757,12 @@ class OpenGradientAnalyzer:
 
     # Model fallback chain (model ID strings, matching docs)
     MODEL_FALLBACK = [
+        "anthropic/claude-4.0-sonnet",
         "openai/gpt-4o",
         "openai/gpt-4.1-2025-04-14",
         "anthropic/claude-3.5-haiku",
-        "anthropic/claude-4.0-sonnet",
     ]
-    DEFAULT_MODEL = "openai/gpt-4o"
+    DEFAULT_MODEL = "anthropic/claude-4.0-sonnet"
 
     def __init__(self):
         self._client = None

@@ -265,7 +265,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
     if normalized_model and normalized_model not in allowed_llm_models:
         logger.warning(f"Invalid llm_model requested: {normalized_model}. Falling back to default.")
         normalized_model = None
-    effective_model = normalized_model or "openai/gpt-4o"
+    effective_model = normalized_model or "anthropic/claude-4.0-sonnet"
     
     # Detect chain type
     chain_type = _detect_chain(contract_address or ticker)
