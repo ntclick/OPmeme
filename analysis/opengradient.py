@@ -948,7 +948,7 @@ class OpenGradientAnalyzer:
         # SDK 0.7.5 accepts model ID strings: "openai/gpt-4o"
         model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
         settlement_mode = _resolve_settlement_mode(
-            og.x402SettlementMode, require_onchain=False
+            og.x402SettlementMode, require_onchain=True
         )
         settlement_mode_name = _settlement_mode_name(settlement_mode)
 
@@ -969,6 +969,8 @@ class OpenGradientAnalyzer:
                 "max_tokens": 2000,
                 "temperature": 0.1,
             }
+            if settlement_mode is not None:
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
 
             result = client.llm.chat(**chat_kwargs)
             
@@ -976,7 +978,9 @@ class OpenGradientAnalyzer:
             if isinstance(result.chat_output, dict):
                 content = result.chat_output.get("content")
                 
-            tx_hash = getattr(result, 'tee_signature', None)
+            tx_hash = _extract_tx_hash(result.payment_response if hasattr(result, "payment_response") else result)
+            payment_hash = getattr(result, "payment_hash", None)
+            verification = getattr(result, "tee_signature", None)
             
             raw_parts.append(content or "")
             
@@ -1123,6 +1127,11 @@ class OpenGradientAnalyzer:
             
             # Pass model as string directly (like og-chat-backend reference)
             model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
+            # Use client.llm.chat() - SDK 0.7.5 accepts model ID strings
+            settlement_mode = _resolve_settlement_mode(
+                og.x402SettlementMode, require_onchain=True
+            )
+            settlement_mode_name = _settlement_mode_name(settlement_mode)
             
             # Match og-chat-backend exactly: Local client
             private_key = _resolve_private_key()
@@ -1134,6 +1143,8 @@ class OpenGradientAnalyzer:
                 "max_tokens": 2000,
                 "temperature": 0.1,
             }
+            if settlement_mode is not None:
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
 
             completion = client.llm.chat(**chat_kwargs)
             
