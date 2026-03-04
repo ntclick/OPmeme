@@ -1010,8 +1010,7 @@ class OpenGradientAnalyzer:
             }
             return
 
-        if self.REQUIRE_X402_TX and not _has_real_tx_hash(tx_hash):
-            logger.warning(f"[METHOD A STREAM] x402 tx hash missing/invalid: {tx_hash}")
+
 
         ai_result = self._parse_ai_output(raw_output, token_type, algo_score)
         required_fields = ["ai_trust_score", "ai_sentiment_score", "verdict", "red_flags", "green_flags"]
