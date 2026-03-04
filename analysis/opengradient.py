@@ -418,15 +418,9 @@ def _extract_payment_hash(value: Any) -> Optional[str]:
     return _walk(value, 4)
 
 
-def _pick_best_model_enum(og_module: Any, candidates: list[str]) -> str:
-    """Return first model enum name available in current SDK."""
-    tee_llm = getattr(og_module, "TEE_LLM", None)
-    if tee_llm is None:
-        return "GPT_4_1_2025_04_14"
-    for name in candidates:
-        if hasattr(tee_llm, name):
-            return name
-    return "GPT_4_1_2025_04_14"
+def _pick_best_model(candidates: list[str], default: str = "anthropic/claude-4.0-sonnet") -> str:
+    """Return first candidate model ID, or default."""
+    return candidates[0] if candidates else default
 
 
 def _normalize_llm_model_enum(value: Optional[str]) -> Optional[str]:
@@ -867,11 +861,8 @@ class OpenGradientAnalyzer:
         llm_model: Optional[str] = None,
     ) -> dict:
         """Run verifiable AI inference on OpenGradient."""
-        requested_model = _normalize_llm_model_enum(llm_model)
-        selected_model = self._selected_model
-        if requested_model:
-            selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
-        
+        # Use the user-selected model ID directly (e.g. "anthropic/claude-4.0-sonnet")
+        selected_model = llm_model if llm_model and "/" in llm_model else self.DEFAULT_MODEL
         # Run Inference
         result = await self._run_inference(
             ticker,
@@ -891,10 +882,8 @@ class OpenGradientAnalyzer:
         scoring_result: dict,
         llm_model: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
-        requested_model = _normalize_llm_model_enum(llm_model)
-        selected_model = self._selected_model
-        if requested_model:
-            selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
+        # Use the user-selected model ID directly
+        selected_model = llm_model if llm_model and "/" in llm_model else self.DEFAULT_MODEL
 
         input_text = self._prepare_input(ticker, tweets_summary, on_chain_data, scoring_result)
         algo_score = scoring_result.get("overall_score", 50)
