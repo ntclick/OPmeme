@@ -465,7 +465,16 @@
                 });
 
                 removeTyping(typingId);
-                if (!resp.ok) throw new Error('Request failed');
+                if (!resp.ok) {
+                    let errorDetail = 'Request failed';
+                    try {
+                        const errData = await resp.json();
+                        errorDetail = errData.detail || errData.error || `Error ${resp.status}`;
+                    } catch (e) {
+                        errorDetail = `Server Error (${resp.status})`;
+                    }
+                    throw new Error(errorDetail);
+                }
 
                 const data = await resp.json();
                 chatHistory.push({ role: 'user', content: msg });
