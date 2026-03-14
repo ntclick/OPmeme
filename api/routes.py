@@ -1113,7 +1113,7 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
                 result = await analyze_coin(analyze_req, db)
                 # Convert AnalyzeResponse to dict
                 analysis_data = jsonable_encoder(result)
-                analysis_context = build_analysis_context(analysis_data)
+                analysis_context = build_analysis_context(analysis_data, query_address=contract)
                 logger.info(f"✅ Chat: analysis complete for {contract[:12]}...")
             except HTTPException as e:
                 logger.warning(f"⚠️ Chat: analysis failed: {e.detail}")

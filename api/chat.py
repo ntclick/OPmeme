@@ -59,28 +59,29 @@ def detect_chain(address: str) -> str:
 
 # ── Chat system prompt ────────────────────────────────────────────────────────
 
+# ── Chat system prompt ────────────────────────────────────────────────────────
+
 CHAT_SYSTEM_PROMPT = """\
 You are 'CoinCheckGo Assistant' — an expert crypto analyst chatbot on Solana & EVM chains.
 You help users analyze meme coins and tokens through natural conversation.
 
 STYLE:
-- Respond strictly in English by default. Only use Vietnamese if the user explicitly asks for it.
-- Responses must be English (default). Only use Vietnamese if explicitly requested by the user.
+- Respond in the user's language (Vietnamese or English). If the user speaks Vietnamese, respond in Vietnamese. Default to English if unsure.
 - Be extremely concise and focus on the most important information.
-- Do not explain excessively; keep bullet points minimal.
 - Use simple, professional, and easy-to-understand language.
-- Always include a brief risk warning: "Not financial advice. You can lose 100%."
+- Always include a brief risk warning: "Not financial advice. You can lose 100%." (Translation: "Đây không phải là lời khuyên tài chính. Bạn có thể mất hoàn toàn vốn đầu tư.")
 
 RULES FOR HANDLING ANALYSIS AND ERRORS:
-1. If analysis fails (e.g. wallet address, token not found): State the error clearly in 1-2 sentences in English. Example: "This is a wallet address, not a token contract. Please check again."
-2. If format is wrong: Briefly mention the correct format in English and ask to check again.
-3. If successful: Summarize key points concisely (Score, Red/Green flags, Verdict).
+1. If the system provides analysis data: Use it! Ground your response strictly in that data.
+2. If the user provides a string that looks like a Solana/EVM address and the system provides analysis data for it, IT IS A VALID TOKEN. DO NOT call it a wallet address.
+3. Explicitly mention that you have verified the data on sources like DexScreener/Birdeye when explaining the results.
+4. If analysis fails (e.g. truly invalid address or no data found), briefly explain why in the user's language.
 
 Response limit: Maximum 150 words. The shorter, the better.
 """
 
 
-def build_analysis_context(analysis_data: dict) -> str:
+def build_analysis_context(analysis_data: dict, query_address: Optional[str] = None) -> str:
     """Build a human-readable context string from analysis API response."""
     if not analysis_data:
         return ""
@@ -89,45 +90,37 @@ def build_analysis_context(analysis_data: dict) -> str:
     score = analysis_data.get("overall_score", "?")
     risk = analysis_data.get("risk_level", "?")
     verdict = analysis_data.get("verdict", "")
+    contract = analysis_data.get("contract_address", "N/A")
 
     market = analysis_data.get("market_data") or {}
-    token_meta = market.get("token") or {}
 
     lines = [
-        f"=== ANALYSIS RESULT FOR ${ticker} ===",
-        f"Contract: {analysis_data.get('contract_address', 'N/A')}",
+        f"=== SYSTEM ANALYSIS RESULT ===",
+    ]
+    if query_address:
+        lines.append(f"Query Address: {query_address} (Verified as token ${ticker})")
+    
+    lines.extend([
+        f"Analyzed Token: {contract} (Ticker: ${ticker})",
         f"Overall Trust Score: {score}/100 (Risk: {risk})",
         f"",
-        f"--- Market Data ---",
+        f"--- Market Data (Verified via DexScreener/Birdeye) ---",
         f"Price: ${market.get('price', 'N/A')}",
         f"Market Cap: ${market.get('market_cap', 0):,.0f}" if isinstance(market.get('market_cap'), (int, float)) else "Market Cap: N/A",
         f"Liquidity: ${market.get('liquidity_usd', 0):,.0f}" if isinstance(market.get('liquidity_usd'), (int, float)) else "Liquidity: N/A",
         f"Holders: {market.get('holders', 'N/A'):,}" if isinstance(market.get('holders'), (int, float)) else f"Holders: {market.get('holders', 'N/A')}",
         f"Volume 24h: ${market.get('volume_24h', 0):,.0f}" if isinstance(market.get('volume_24h'), (int, float)) else "Volume 24h: N/A",
-        f"Price Change 1h: {market.get('price_change_1h', 0):.1f}%" if isinstance(market.get('price_change_1h'), (int, float)) else "",
-        f"Price Change 24h: {market.get('price_change_24h', 0):.1f}%" if isinstance(market.get('price_change_24h'), (int, float)) else "",
         f"Token Age: {market.get('token_age_hours', 'N/A'):.1f} hours" if isinstance(market.get('token_age_hours'), (int, float)) else "",
         f"",
         f"--- Score Breakdown ---",
-    ]
+    ])
 
     breakdown = analysis_data.get("breakdown") or {}
     tech = breakdown.get("technical") or {}
     onchain = breakdown.get("onchain") or {}
 
-    if tech.get("components"):
-        tc = tech["components"]
-        lines.append(f"Technical (65%): {tech.get('total', '?')}/100")
-        for k, v in tc.items():
-            if isinstance(v, dict):
-                lines.append(f"  - {k}: {v.get('score', '?')}/100")
-
-    if onchain.get("components"):
-        oc = onchain["components"]
-        lines.append(f"On-Chain (35%): {onchain.get('total', '?')}/100")
-        for k, v in oc.items():
-            if isinstance(v, dict):
-                lines.append(f"  - {k}: {v.get('score', '?')}/100")
+    lines.append(f"Technical (65%): {tech.get('total', '?')}/100")
+    lines.append(f"On-Chain (35%): {onchain.get('total', '?')}/100")
 
     red = analysis_data.get("red_flags") or []
     green = analysis_data.get("green_flags") or []
@@ -146,7 +139,7 @@ def build_analysis_context(analysis_data: dict) -> str:
 
     if verdict:
         lines.append(f"")
-        lines.append(f"--- AI Verdict ---")
+        lines.append(f"--- Verdict ---")
         lines.append(verdict)
 
     return "\n".join(lines)
@@ -160,21 +153,21 @@ def build_messages(
     """Build the message array for the LLM call."""
     messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
 
-    # If we have analysis context, inject it as the first assistant context
-    if analysis_context:
-        messages.append({
-            "role": "user",
-            "content": f"Here is the analysis data I just ran. Please summarize it conversationally for the user:\n\n{analysis_context}"
-        })
-
-    # Add conversation history
+    # 1. Add conversation history
     for msg in history:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
 
-    # Add current user message (if not already a repeat of the last history entry)
+    # 2. Inject analysis context as an internal "assistant" grounding message if present
+    if analysis_context:
+        messages.append({
+            "role": "assistant",
+            "content": f"[INTERNAL VERIFIED DATA]\n{analysis_context}\n[END DATA]"
+        })
+
+    # 3. Add current user message
     if user_message:
         messages.append({"role": "user", "content": user_message})
 
