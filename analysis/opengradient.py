@@ -757,6 +757,7 @@ class OpenGradientAnalyzer:
         "anthropic/claude-3.5-haiku",
     ]
     DEFAULT_MODEL = "anthropic/claude-4.0-sonnet"
+    REQUIRE_X402_TX = False
 
     def __init__(self):
         self._client = None
@@ -793,7 +794,7 @@ class OpenGradientAnalyzer:
             except Exception as e:
                 logger.warning(f"⚠️ Permit2 approval failed: {e}")
 
-            self._selected_model = _pick_best_model_enum(self._og, self.MODEL_FALLBACK)
+            self._selected_model = _normalize_llm_model_enum(_pick_best_model(self.MODEL_FALLBACK))
             
             # Init LLM via custom safe adapter
             self._llm = SafeOpenGradientLLM(client=self._client, model_enum=self._selected_model)
@@ -851,6 +852,55 @@ class OpenGradientAnalyzer:
             return None
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    async def chat_completion(
+        self,
+        messages: list[dict],
+        llm_model: Optional[str] = None,
+        max_tokens: int = 1000,
+    ) -> dict:
+        """
+        Simple chat completion for conversational use.
+        Returns {"content": "...", "error": None} or {"content": None, "error": "..."}.
+        """
+        if not self._initialized:
+            error_msg = self._init_error or "OpenGradient SDK not initialized"
+            logger.error(f"❌ Chat completion failed: {error_msg}")
+            return {"content": None, "error": error_msg}
+
+        model_str = llm_model if llm_model and "/" in llm_model else self.DEFAULT_MODEL
+
+        try:
+            private_key = _resolve_private_key()
+            client = og.Client(private_key=private_key)
+
+            settlement_mode = _resolve_settlement_mode(
+                og.x402SettlementMode, require_onchain=False
+            )
+
+            chat_kwargs = {
+                "model": model_str,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.4,
+            }
+            if settlement_mode is not None:
+                chat_kwargs["x402_settlement_mode"] = settlement_mode
+
+            result = client.llm.chat(**chat_kwargs)
+
+            content = getattr(result.chat_output, "content", None)
+            if isinstance(result.chat_output, dict):
+                content = result.chat_output.get("content")
+            if content is None and isinstance(result.chat_output, str):
+                content = result.chat_output
+
+            logger.info(f"✅ Chat completion OK: {len(content or '')} chars")
+            return {"content": content or "", "error": None}
+
+        except Exception as e:
+            logger.error(f"❌ Chat completion error: {e}")
+            return {"content": None, "error": str(e)}
 
     async def analyze_coin(
         self,
@@ -1108,7 +1158,7 @@ class OpenGradientAnalyzer:
             requested_model = _normalize_llm_model_enum(llm_model)
             selected_model = self._selected_model
             if requested_model:
-                selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
+                selected_model = _normalize_llm_model_enum(_pick_best_model([requested_model] + self.MODEL_FALLBACK))
             
             # Build messages for direct chat
             messages = [
@@ -1234,7 +1284,7 @@ class OpenGradientAnalyzer:
             requested_model = _normalize_llm_model_enum(llm_model)
             selected_model = self._selected_model
             if requested_model:
-                selected_model = _pick_best_model_enum(self._og, [requested_model] + self.MODEL_FALLBACK)
+                selected_model = _normalize_llm_model_enum(_pick_best_model([requested_model] + self.MODEL_FALLBACK))
             llm = SafeOpenGradientLLM(client=self._client, model_enum=selected_model)
 
             agent = create_react_agent(llm, tools)
@@ -1530,10 +1580,10 @@ class OpenGradientAnalyzer:
         """Return enhanced default result when AI parsing fails."""
         
         base_scores = {
-            "large_cap": (65, f"Phân tích AI thất bại ({error_msg}). Meme coin vốn hóa lớn đã được khẳng định với cộng đồng vững chắc. Đang sử dụng điểm số cơ sở theo thuật toán an toàn."),
-            "established": (50, f"Phân tích AI thất bại ({error_msg}). Token tầm trung đã được thiết lập với hồ sơ hợp lý. Đang sử dụng điểm số cơ sở theo thuật toán cân bằng."),
-            "new": (30, f"Phân tích AI thất bại ({error_msg}). Token mới với lịch sử hạn chế. Đang sử dụng điểm số cơ sở theo thuật toán cẩn trọng do rủi ro rug pool cao."),
-            "unknown": (45, f"Phân tích AI thất bại ({error_msg}). Chỉ sử dụng điểm số thuật toán. Tự nghiên cứu kỹ (DYOR) trước khi đầu tư."),
+            "large_cap": (65, f"AI Analysis failed ({error_msg}). Large-cap meme coin established with a solid community. Using safe algorithmic base score."),
+            "established": (50, f"AI Analysis failed ({error_msg}). Mid-range token established with a reasonable profile. Using balanced algorithmic base score."),
+            "new": (30, f"AI Analysis failed ({error_msg}). New token with limited history. Using cautious algorithmic base score due to high rug pool risk."),
+            "unknown": (45, f"AI Analysis failed ({error_msg}). Algorithmic score only. Please DYOR before investing."),
         }
         
         default_trust, verdict = base_scores.get(token_type, base_scores["unknown"])
@@ -1545,11 +1595,11 @@ class OpenGradientAnalyzer:
             "ai_trust_score": trust_score,
             "ai_sentiment_score": 50,
             "verdict": verdict,
-            "red_flags": [f"Phân tích AI thất bại: {error_msg}"] if error_msg else ["Phân tích AI thất bại - chỉ dựa vào điểm số thuật toán"],
+            "red_flags": [f"AI Analysis failed: {error_msg}"] if error_msg else ["AI Analysis failed - relying on algorithmic score"],
             "green_flags": [],
             "bot_likelihood": "UNKNOWN",
             "recommendation": "DYOR" if token_type in ["new", "unknown"] else "LOOKS_OK",
-            "scoring_rationale": f"Fallback mặc định cho token {token_type} do lỗi AI inference. Điểm tin cậy được đặt ở {trust_score} dựa trên phân loại token và điểm thuật toán ({algo_score}). Lỗi: {error_msg}",
+            "scoring_rationale": f"Default fallback for {token_type} token due to AI inference error. Trust score set to {trust_score} based on token classification and algorithmic score ({algo_score}). Error: {error_msg}",
             "twitter_real": False,
             "onchain_real": False,
         }
