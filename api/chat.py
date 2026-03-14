@@ -19,27 +19,23 @@ _DEX_URL_RE = re.compile(r'dexscreener\.com/[a-zA-Z0-9-]+/([a-zA-Z0-9]+)')
 
 
 def detect_contract(message: str) -> Optional[str]:
-    """Extract first contract address or DexScreener URL, handling potential spaces/typos."""
-    # 1. Check for DexScreener URL first (ignore spaces in URL if accidental)
+    """Extract first Solana contract address or DexScreener URL. EVM is disabled."""
+    # 1. Check for DexScreener URL first
     m = _DEX_URL_RE.search(message.replace(" ", ""))
     if m:
         candidate = m.group(1)
         if len(candidate) >= 32:
+            # Basic length check for Solana-like address
             return candidate
 
-    # 2. Try standard matching (unmodified message)
-    m = _EVM_RE.search(message)
-    if m: return m.group(1)
+    # 2. Try standard matching for Solana (skip EVM)
     m = _SOL_RE.search(message)
     if m:
         candidate = m.group(1)
         if len(candidate) >= 32: return candidate
 
-    # 3. Robust pass: remove ALL whitespace and try matching
-    # This catches "9kwb4p7k... lvt4gqay43p" typos
+    # 3. Robust pass: remove ALL whitespace and try matching Solana
     clean_msg = "".join(message.split())
-    m = _EVM_RE.search(clean_msg)
-    if m: return m.group(1)
     m = _SOL_RE.search(clean_msg)
     if m:
         candidate = m.group(1)
@@ -61,22 +57,22 @@ def detect_chain(address: str) -> str:
 
 CHAT_SYSTEM_PROMPT = """\
 You are 'CoinCheckGo Assistant' — a sharp, expert crypto analyst and experienced trader.
-Your mission is to provide professional, no-nonsense insights on tokens across Solana & EVM chains.
+Your mission is to provide professional, no-nonsense insights on tokens across the Solana ecosystem ONLY.
 
 SCOPE & RESTRICTIONS:
-- ONLY answer questions related to cryptocurrency, blockchain, and token market analysis. 
-- If a user asks about non-crypto topics, politely but firmly decline: "Tôi chỉ chuyên về phân tích Crypto và Token. Hãy quay lại với biểu đồ nhé." (or English equivalent: "I only discuss crypto and token analysis. Let's get back to the charts.")
+- ONLY answer questions related to Solana cryptocurrency, Solana blockchain, and Solana token market analysis.
+- WE ONLY SUPPORT SOLANA. If a user asks about EVM (Ethereum, BSC, Base, etc.) or non-crypto topics, politely but firmly decline: "Hệ thống hiện tại chỉ hỗ trợ mạng Solana. Hãy quay lại với các token trên Solana nhé." (or English equivalent: "We currently only support the Solana network. Let's stick to Solana tokens.")
 
 STYLE & TONE:
-- Tone: Sharp, authoritative, and professional. Speak like a veteran trader who has seen many cycles.
-- Responses must be 'gãy gọn' (concise) and direct. No fluff or unnecessary introductions.
+- Tone: Sharp, authoritative, and professional. Speak like a veteran trader.
+- Responses must be 'gãy gọn' (concise) and direct.
 - Language: Respond in the user's language (Vietnamese or English).
 - Always include a brief risk warning: "Not financial advice. You can lose 100%." (Translation: "Đây không phải là lời khuyên tài chính. Bạn có thể mất hoàn toàn vốn đầu tư.")
 
 RULES FOR HANDLING ANALYSIS:
 1. If the system provides analysis data: Use it! Ground your response strictly in that data.
-2. If the user provides a Solana/EVM address and the system provides analysis data for it, IT IS A VALID TOKEN. DO NOT call it a wallet address.
-3. Explicitly mention that you have verified the data on sources like DexScreener/Birdeye to add weight to your expert opinion.
+2. If the user provides a Solana address and the system provides analysis data for it, IT IS A VALID TOKEN. DO NOT call it a wallet address.
+3. Explicitly mention that you have verified the data on sources like DexScreener/Birdeye.
 
 Response limit: Maximum 150 words. Be sharp.
 """
