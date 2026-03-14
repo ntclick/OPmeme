@@ -213,14 +213,18 @@
                 <span class="font-bold text-xl tracking-tight">CoinCheck<span class="text-primary">Go</span></span>
             </div>
 
-            <div class="hidden md:flex items-center gap-6 text-sm text-gray-400 font-medium">
+            <div class="flex items-center gap-3 md:gap-6 text-[10px] md:text-sm text-gray-400 font-medium overflow-x-auto no-scrollbar py-2">
+                <a href="/static/chat.html" class="flex items-center gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-lg bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-all font-bold whitespace-nowrap">
+                    <i data-lucide="message-square" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+                    <span>Chat AI</span>
+                </a>
                 <button onclick="toggleLanguage()" id="langToggleBtn"
-                    class="px-2 py-1 rounded border border-white/10 hover:border-primary/50 transition">VI</button>
-                <a href="#" id="navFeatures" class="hover:text-white transition">Features</a>
-                <a href="#" id="navTrending" class="hover:text-white transition">Trending</a>
-                <div class="flex items-center gap-1 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
-                    <i data-lucide="cpu" class="w-4 h-4 text-secondary"></i>
-                    <span class="text-gray-300">OpenGradient AI</span>
+                    class="px-2 py-1 rounded border border-white/10 hover:border-primary/50 transition flex-shrink-0">VI</button>
+                <a href="#" id="navFeatures" class="hover:text-white transition whitespace-nowrap">Features</a>
+                <a href="#" id="navTrending" class="hover:text-white transition whitespace-nowrap">Trending</a>
+                <div class="flex items-center gap-1 bg-white/5 px-2.5 md:px-3 py-1.5 rounded-full border border-white/10 flex-shrink-0">
+                    <i data-lucide="cpu" class="w-3.5 h-3.5 md:w-4 md:h-4 text-secondary"></i>
+                    <span class="text-gray-300">OpenGradient</span>
                 </div>
             </div>
         </div>
@@ -254,9 +258,19 @@
                 </span> <span id="heroTitleScams" class="text-gray-500 line-through decoration-red-500/50 decoration-2">
                     & Scams.</span>
             </h2>
-            <p id="heroDesc" class="text-gray-400 max-w-xl mx-auto text-lg">
+            <p id="heroDesc" class="text-gray-400 max-w-xl mx-auto text-lg mb-8">
                 Technical & On-Chain Analysis powered by OpenGradient AI. Real-time auditing for Solana tokens.
             </p>
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <a href="#searchContainer" class="w-full sm:w-auto px-8 py-3 rounded-xl bg-white text-black font-bold hover:bg-gray-200 transition-all flex items-center justify-center gap-2">
+                    <i data-lucide="search" class="w-5 h-5"></i>
+                    Start Audit
+                </a>
+                <a href="/static/chat.html" class="w-full sm:w-auto px-8 py-3 rounded-xl bg-secondary/20 text-white border border-secondary/30 font-bold hover:bg-secondary/30 transition-all flex items-center justify-center gap-2 backdrop-blur-sm">
+                    <i data-lucide="message-square" class="w-5 h-5 text-secondary"></i>
+                    Chat with AI
+                </a>
+            </div>
         </div>
 
         <!-- Search Box -->
@@ -265,13 +279,15 @@
                 <div
                     class="absolute -inset-1 bg-gradient-to-r from-primary to-secondary rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-500">
                 </div>
-                <div class="relative flex items-center glass-panel rounded-xl p-2">
-                    <i data-lucide="search" class="w-6 h-6 text-gray-400 ml-3"></i>
-                    <input type="text" id="tickerInput"
-                        class="w-full bg-transparent border-none text-xl text-white px-4 py-3 focus:outline-none placeholder-gray-600 font-mono"
-                        placeholder="Enter token symbol or contract address..." autocomplete="off" spellcheck="false">
+                <div class="relative flex flex-col md:flex-row items-stretch md:items-center glass-panel rounded-xl p-2 gap-2">
+                    <div class="flex items-center flex-1">
+                        <i data-lucide="search" class="w-6 h-6 text-gray-400 ml-3"></i>
+                        <input type="text" id="tickerInput"
+                            class="w-full bg-transparent border-none text-base md:text-xl text-white px-4 py-3 focus:outline-none placeholder-gray-600 font-mono"
+                            placeholder="Token symbol or address..." autocomplete="off" spellcheck="false">
+                    </div>
                     <button id="analyzeBtn" onclick="analyzeToken()"
-                        class="bg-white text-black hover:bg-primary transition-colors px-6 py-3 rounded-lg font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+                        class="bg-white text-black hover:bg-primary transition-colors px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
                         <span id="btnAuditText">Audit Token</span>
                         <i data-lucide="arrow-right" class="w-4 h-4"></i>
                     </button>
@@ -385,7 +401,7 @@
                     <!-- Summary Info -->
                     <div class="flex-1 text-center md:text-left">
                         <div class="flex items-center justify-center md:justify-start gap-3 mb-2">
-                            <img id="tokenLogo" alt=""
+                            <img id="tokenLogo" alt="" loading="lazy"
                                 class="hidden w-9 h-9 rounded-full border border-white/10 bg-white/5 object-contain" />
                             <h2 class="text-4xl md:text-5xl font-black tracking-tight" id="tickerDisplay">--</h2>
                             <span
@@ -399,7 +415,7 @@
                         </p>
 
                         <!-- Market Data Row -->
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6" id="marketDataRow">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" id="marketDataRow">
                             <div class="bg-white/5 border border-white/10 rounded-lg p-3">
                                 <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">MCap</div>
                                 <div class="font-mono text-sm text-white" id="marketCapDisplay">--</div>
@@ -450,7 +466,7 @@
                 Score Breakdown
             </h3>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
 
                 <!-- Technical (65%) -->
                 <div

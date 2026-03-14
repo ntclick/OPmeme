@@ -784,8 +784,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         if ai_result.get("ai_result") and ai_result.get("used_opengradient"):
             ai_data = ai_result["ai_result"]
             
-            # Chỉ dùng AI score nếu THẬT SỰ thành công (không phải default)
-            if not ai_data.get("verdict", "").startswith("Phân tích AI thất bại"):
+            # Only use AI score if SUCCESSFUL (not default fallback)
+            if not ai_data.get("verdict", "").startswith("AI Analysis failed"):
                 ai_trust_score = ai_data.get("ai_trust_score")
                 ai_inference_success = True
                 payment_hash = ai_result.get("payment_hash")
@@ -817,7 +817,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # Always get the algorithmic score first
         score = overall["score"]
         
-        # Generate verdict từ ALGORITHMIC score (không dùng AI)
+        # Generate verdict from ALGORITHMIC score (don't use AI fallback)
         if not ai_inference_success or not verdict:
             top_green = green_flags[0] if green_flags else None
             top_red = red_flags[0] if red_flags else None
@@ -1062,6 +1062,91 @@ async def analyze_coin_stream(request: AnalyzeRequest, db: Session = Depends(get
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHAT ENDPOINT
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[dict] = []
+    llm_model: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    role: str = "assistant"
+    content: str
+    analysis_data: Optional[dict] = None
+    contract_detected: Optional[str] = None
+
+
+@router.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Chat endpoint: auto-detects contracts from user messages,
+    runs analysis internally, and returns conversational AI response.
+    """
+    from api.chat import detect_contract, build_analysis_context, build_messages
+
+    user_msg = request.message.strip()
+    if not user_msg:
+        return ChatResponse(content="Hi! Paste a contract address or ask anything about meme coins 🚀")
+
+    llm_model = request.llm_model or "anthropic/claude-4.0-sonnet"
+    contract = detect_contract(user_msg)
+    analysis_data = None
+    analysis_context = None
+
+    if contract:
+        logger.info(f"💬 Chat: detected contract {contract[:12]}... in message")
+        # Run analysis through existing endpoint logic
+        try:
+            analyze_req = AnalyzeRequest(
+                ticker=contract,
+                contract_address=contract,
+                force_refresh=True,
+                llm_model=llm_model,
+            )
+            result = await analyze_coin(analyze_req, db)
+            # Convert AnalyzeResponse to dict
+            analysis_data = jsonable_encoder(result)
+            analysis_context = build_analysis_context(analysis_data)
+            logger.info(f"✅ Chat: analysis complete for {contract[:12]}...")
+        except HTTPException as e:
+            logger.warning(f"⚠️ Chat: analysis failed: {e.detail}")
+            analysis_context = f"Analysis failed for contract {contract}: {e.detail}"
+        except Exception as e:
+            logger.warning(f"⚠️ Chat: analysis error: {e}")
+            analysis_context = f"Analysis error for contract {contract}: {str(e)}"
+
+    # Build messages for LLM
+    messages = build_messages(
+        user_message=user_msg,
+        history=request.history,
+        analysis_context=analysis_context,
+    )
+
+    # Get AI response
+    chat_result = await opengradient_analyzer.chat_completion(
+        messages=messages,
+        llm_model=llm_model,
+    )
+
+    if chat_result.get("error"):
+        # Fallback: return analysis data directly without LLM
+        if analysis_context:
+            content = f"⚠️ AI chat unavailable, but here's the analysis:\n\n{analysis_context}"
+        else:
+            content = f"⚠️ AI service temporarily unavailable: {chat_result['error']}"
+    else:
+        content = chat_result.get("content", "Sorry, I couldn't generate a response.")
+
+    return ChatResponse(
+        content=content,
+        analysis_data=analysis_data,
+        contract_detected=contract,
     )
 
 

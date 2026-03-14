@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CoinCheckGo - AI Token Analyzer Chat</title>
+    <meta name="description" content="Chat-based meme coin analyzer powered by OpenGradient AI. Paste any contract address for instant analysis.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#00ff9d',
+                        secondary: '#9d00ff',
+                        dark: '#0a0a0a',
+                        darker: '#050505',
+                        panel: '#111111'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            background-color: #050505;
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+            background-image:
+                radial-gradient(circle at 15% 50%, rgba(0, 255, 157, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 85% 30%, rgba(157, 0, 255, 0.05) 0%, transparent 50%);
+            background-attachment: fixed;
+            margin: 0; padding: 0;
+            height: 100vh; overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+        .glass-panel {
+            background: rgba(17, 17, 17, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .neon-border { position: relative; }
+        .neon-border::before {
+            content: ''; position: absolute; top: -1px; left: -1px; right: -1px; bottom: -1px;
+            border-radius: inherit; padding: 1px;
+            background: linear-gradient(45deg, #00ff9d, transparent, #9d00ff);
+            mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            mask-composite: exclude; -webkit-mask-composite: xor;
+            opacity: 0.5; pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .neon-border:focus-within::before { opacity: 1; }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .animate-float { animation: float 6s ease-in-out infinite; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        /* Chat bubbles */
+        .msg-user {
+            background: rgba(0, 255, 157, 0.08);
+            border: 1px solid rgba(0, 255, 157, 0.15);
+            border-radius: 16px 16px 4px 16px;
+        }
+        .msg-ai {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px 16px 16px 4px;
+        }
+        .msg-ai p { margin-bottom: 0.5em; }
+        .msg-ai p:last-child { margin-bottom: 0; }
+
+        /* Typing indicator */
+        .typing-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: rgba(255,255,255,0.4);
+            animation: dotPulse 1.4s ease-in-out infinite;
+        }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes dotPulse {
+            0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+            40% { opacity: 1; transform: scale(1.2); }
+        }
+
+        /* Analysis card in chat */
+        .analysis-card {
+            background: rgba(10, 10, 10, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+        }
+        .score-ring {
+            width: 80px; height: 80px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: conic-gradient(from 0deg, var(--c) var(--d), rgba(255,255,255,0.05) var(--d));
+            position: relative;
+        }
+        .score-ring::before {
+            content: ''; position: absolute; inset: 5px;
+            border-radius: 50%; background: #0a0a0a; z-index: 1;
+        }
+        .score-ring .val { position: relative; z-index: 2; }
+
+        /* Markdown-lite formatting in AI messages */
+        .ai-content ul { list-style: disc; padding-left: 1.2em; margin: 0.4em 0; }
+        .ai-content ol { list-style: decimal; padding-left: 1.2em; margin: 0.4em 0; }
+        .ai-content li { margin: 0.2em 0; }
+        .ai-content strong, .ai-content b { color: #fff; font-weight: 600; }
+        .ai-content code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
+
+        #llmModelSelect {
+            color-scheme: dark;
+            background-color: rgba(0, 0, 0, 0.65);
+            color: #ffffff;
+        }
+        #llmModelSelect option {
+            background-color: #050505;
+            color: #ffffff;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Top Navigation -->
+    <nav class="w-full border-b border-white/5 bg-black/50 backdrop-blur-md z-50 flex-shrink-0">
+        <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <a href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
+                    <div class="w-7 h-7 md:w-8 md:h-8 rounded bg-gradient-to-br from-primary to-emerald-600 flex items-center justify-center shadow-[0_0_15px_rgba(0,255,157,0.3)]">
+                        <i data-lucide="shield" class="w-4 h-4 md:w-5 md:h-5 text-black"></i>
+                    </div>
+                    <span class="font-bold text-lg md:text-xl tracking-tight">CoinCheck<span class="text-primary">Go</span></span>
+                </a>
+            </div>
+            <div class="flex items-center gap-2 md:gap-3 text-sm overflow-x-auto no-scrollbar">
+                <select id="llmModelSelect"
+                    class="bg-black/60 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] md:text-xs text-white font-mono focus:outline-none focus:border-primary/60 flex-shrink-0">
+                    <option value="openai/gpt-4o">GPT-4o</option>
+                    <option value="openai/gpt-4.1-2025-04-14">GPT-4.1</option>
+                    <option value="openai/o4-mini">o4-mini</option>
+                    <option value="anthropic/claude-4.0-sonnet" selected>Claude 4.0 Sonnet</option>
+                    <option value="anthropic/claude-3.7-sonnet">Claude 3.7 Sonnet</option>
+                    <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku</option>
+                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="google/gemini-2.5-pro">Gemini 2.5 Pro</option>
+                    <option value="google/gemini-2.0-flash">Gemini 2.0 Flash</option>
+                    <option value="x-ai/grok-3-beta">Grok 3 Beta</option>
+                </select>
+                <div class="flex items-center gap-1 bg-white/5 px-2 py-1 rounded-full border border-white/10">
+                    <i data-lucide="cpu" class="w-3.5 h-3.5 text-secondary"></i>
+                    <span class="text-gray-400 text-xs">OpenGradient AI</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Chat Container -->
+    <main class="flex-1 flex flex-col max-w-4xl mx-auto w-full overflow-hidden">
+
+        <!-- Messages Area -->
+        <div id="chatMessages" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+            <!-- Welcome message -->
+            <div class="flex justify-start">
+                <div class="msg-ai px-4 py-3 max-w-[85%]">
+                    <div class="flex items-center gap-2 mb-2">
+                        <div class="w-6 h-6 rounded-full bg-gradient-to-br from-secondary to-purple-600 flex items-center justify-center">
+                            <i data-lucide="bot" class="w-3.5 h-3.5 text-white"></i>
+                        </div>
+                        <span class="text-xs font-bold text-secondary/80">CoinCheckGo AI</span>
+                    </div>
+                    <div class="text-sm text-gray-300 leading-relaxed">
+                        <p class="font-medium text-white mb-2">Hello! 👋 I'm your CoinCheckGo AI Assistant.</p>
+                        <p>Paste a <strong>Solana or EVM contract address</strong> for a verifiable safety audit, or ask me anything about the current market.</p>
+                        <div class="mt-4 p-2 bg-white/5 rounded border border-white/10 font-mono text-[11px] text-gray-500">
+                            Quick start: <code>7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trending Quick Actions -->
+        <div id="trendingBar" class="px-4 py-2 border-t border-white/5 flex-shrink-0">
+            <div class="flex items-center gap-2 overflow-x-auto pb-1" id="trendingChips">
+                <span class="text-xs text-gray-600 whitespace-nowrap">Trending:</span>
+                <span class="text-xs text-gray-600 font-mono">Loading...</span>
+            </div>
+        </div>
+
+        <!-- Input Bar -->
+        <div class="px-4 py-4 border-t border-white/5 bg-black/30 flex-shrink-0">
+            <div class="flex items-end gap-3 max-w-4xl mx-auto relative group">
+                <div class="absolute -inset-1 bg-gradient-to-r from-primary to-secondary rounded-2xl blur opacity-10 group-hover:opacity-20 transition duration-500 pointer-events-none"></div>
+                <div class="flex-1 relative neon-border rounded-xl glass-panel z-10">
+                    <textarea id="chatInput" rows="1"
+                        class="w-full bg-transparent border-none rounded-xl px-4 py-3.5 text-sm text-white resize-none focus:outline-none placeholder-gray-600 font-mono transition-all"
+                        placeholder="Paste contract, type token name, or ask a question..."
+                        style="max-height: 120px;"></textarea>
+                </div>
+                <button id="sendBtn" type="button"
+                    class="bg-white text-black hover:bg-primary transition-all px-5 py-3.5 rounded-xl font-bold flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0 shadow-lg z-10">
+                    <i data-lucide="send" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="text-[10px] text-gray-600 mt-1.5 text-center">
+                Powered by OpenGradient Verifiable AI · Not financial advice
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // ── State ────────────────────────────────────────────────────────────
+        let chatHistory = [];
+        let isProcessing = false;
+
+        // ── DOM References ───────────────────────────────────────────────────
+        const messagesDiv = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const llmSelect = document.getElementById('llmModelSelect');
+
+        // ── Helpers ──────────────────────────────────────────────────────────
+        function escapeHtml(str) {
+            if (!str) return '';
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function getRiskConfig(score) {
+            const s = Number(score) || 0;
+            if (s >= 80) return { color: '#00ff9d', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400', label: 'MOON' };
+            if (s >= 65) return { color: '#3b82f6', bg: 'bg-blue-500/10', border: 'border-blue-500/30', text: 'text-blue-400', label: 'LOW RISK' };
+            if (s >= 50) return { color: '#eab308', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-400', label: 'MEDIUM' };
+            if (s >= 35) return { color: '#f97316', bg: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-400', label: 'HIGH RISK' };
+            return { color: '#ef4444', bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400', label: 'EXTREME' };
+        }
+
+        function formatAIText(text) {
+            let html = escapeHtml(text);
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            html = html.replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>');
+            html = html.replace(/(<li>.*<\/li>\n?)+/gs, '<ul>$&</ul>');
+            html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+            html = html.replace(/\n\n/g, '</p><p>');
+            html = html.replace(/\n/g, '<br>');
+            return '<p>' + html + '</p>';
+        }
+
+        function scrollToBottom() {
+            requestAnimationFrame(() => {
+                if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            });
+        }
+
+        function appendUserMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'flex justify-end';
+            div.innerHTML = `
+                <div class="msg-user px-4 py-3 max-w-[80%]">
+                    <div class="text-sm text-gray-200 whitespace-pre-wrap break-all font-mono">${escapeHtml(text)}</div>
+                </div>
+            `;
+            messagesDiv.appendChild(div);
+            scrollToBottom();
+        }
+
+        function appendAIMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'flex justify-start';
+            div.innerHTML = `
+                <div class="msg-ai px-4 py-3 max-w-[85%]">
+                    <div class="flex items-center gap-2 mb-2">
+                        <div class="w-6 h-6 rounded-full bg-gradient-to-br from-secondary to-purple-600 flex items-center justify-center">
+                            <i data-lucide="bot" class="w-3.5 h-3.5 text-white"></i>
+                        </div>
+                        <span class="text-xs font-bold text-secondary/80">CoinCheckGo AI</span>
+                    </div>
+                    <div class="ai-content text-sm text-gray-300 leading-relaxed">${formatAIText(text)}</div>
+                </div>
+            `;
+            messagesDiv.appendChild(div);
+            lucide.createIcons();
+            scrollToBottom();
+        }
+
+        let typingCounter = 0;
+        function showTyping() {
+            const id = 'typing-' + (++typingCounter);
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = 'flex justify-start';
+            div.innerHTML = `
+                <div class="msg-ai px-4 py-3">
+                    <div class="flex items-center gap-2 mb-2">
+                        <div class="w-6 h-6 rounded-full bg-gradient-to-br from-secondary to-purple-600 flex items-center justify-center">
+                            <i data-lucide="bot" class="w-3.5 h-3.5 text-white"></i>
+                        </div>
+                        <span class="text-xs font-bold text-secondary/80">CoinCheckGo AI</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 py-1">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <span class="text-xs text-gray-600 ml-2">Analyzing...</span>
+                    </div>
+                </div>
+            `;
+            messagesDiv.appendChild(div);
+            lucide.createIcons();
+            scrollToBottom();
+            return id;
+        }
+
+        function removeTyping(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        function appendAnalysisCard(data) {
+            const score = Math.round(data.trust_score || data.overall_score || 0);
+            const market = data.market_data || {};
+            const token = market.token || {};
+            const ticker = (token.symbol || data.ticker || '').toUpperCase();
+            const name = token.name || '';
+            const addr = data.contract_address || token.address || '';
+            const shortAddr = addr ? (addr.length > 10 ? addr.substring(0, 6) + '...' + addr.substring(addr.length - 4) : addr) : '';
+
+            const rc = getRiskConfig(score);
+            const deg = Math.round((score / 100) * 360);
+
+            const fmtUSD = (v) => {
+                const n = Number(v);
+                if (!isFinite(n) || n <= 0) return '--';
+                if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+                if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+                if (n >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+                return '$' + n.toFixed(0);
+            };
+            const fmtInt = (v) => {
+                const n = Number(v);
+                if (!isFinite(n) || n <= 0) return '--';
+                return n.toLocaleString();
+            };
+
+            const redFlags = (data.red_flags || []).slice(0, 4);
+            const breakdown = data.breakdown || {};
+            const tc = breakdown.technical?.components || {};
+            const oc = breakdown.onchain?.components || {};
+
+            const div = document.createElement('div');
+            div.className = 'flex justify-start';
+            div.innerHTML = `
+                <div class="analysis-card p-4 max-w-[90%] w-full glass-panel neon-border animate-float">
+                    <div class="flex items-center gap-3 mb-4">
+                        ${token.logo ? `<img src="${token.logo}" loading="lazy" class="w-10 h-10 rounded-full border border-white/10 p-1 object-contain bg-black/40" alt="">` : ''}
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <span class="font-bold text-xl text-white tracking-tight">${ticker ? '$' + ticker : (shortAddr || 'ANALYSIS')}</span>
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${rc.bg} ${rc.text} border ${rc.border}">${rc.label}</span>
+                            </div>
+                            ${name ? `<div class="text-xs text-gray-500 font-medium">${escapeHtml(name)}</div>` : ''}
+                            ${shortAddr ? `<div class="text-[10px] text-gray-600 font-mono mt-0.5 opacity-60">${shortAddr}</div>` : ''}
+                        </div>
+                        <div class="score-ring flex-shrink-0 w-[90px] h-[90px]" style="--c:${rc.color};--d:${deg}deg">
+                            <div class="val text-center">
+                                <div class="text-3xl font-black text-white">${score}</div>
+                                <div class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Score</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                        <div class="bg-white/5 rounded-lg p-2 text-center">
+                            <div class="text-[9px] text-gray-500 uppercase font-bold">MCap</div>
+                            <div class="text-xs font-mono text-white">${fmtUSD(market.market_cap)}</div>
+                        </div>
+                        <div class="bg-white/5 rounded-lg p-2 text-center">
+                            <div class="text-[9px] text-gray-500 uppercase font-bold">Liq</div>
+                            <div class="text-xs font-mono text-white">${fmtUSD(market.liquidity_usd)}</div>
+                        </div>
+                        <div class="bg-white/5 rounded-lg p-2 text-center">
+                            <div class="text-[9px] text-gray-500 uppercase font-bold">Holders</div>
+                            <div class="text-xs font-mono text-white">${fmtInt(market.holders)}</div>
+                        </div>
+                        <div class="bg-white/5 rounded-lg p-2 text-center">
+                            <div class="text-[9px] text-gray-500 uppercase font-bold">Vol 24h</div>
+                            <div class="text-xs font-mono text-white">${fmtUSD(market.volume_24h)}</div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                        <div class="bg-white/5 rounded-lg p-2">
+                            <div class="text-[10px] text-blue-400 font-bold mb-1">📊 Technical (65%)</div>
+                            <div class="space-y-0.5 text-[11px]">
+                                <div class="flex justify-between"><span class="text-gray-500">Momentum</span><span class="text-white font-mono">${tc.momentum?.score ?? '--'}</span></div>
+                                <div class="flex justify-between"><span class="text-gray-500">Volume</span><span class="text-white font-mono">${tc.volume?.score ?? '--'}</span></div>
+                                <div class="flex justify-between"><span class="text-gray-500">Trade</span><span class="text-white font-mono">${tc.trade_pressure?.score ?? '--'}</span></div>
+                            </div>
+                        </div>
+                        <div class="bg-white/5 rounded-lg p-2">
+                            <div class="text-[10px] text-emerald-400 font-bold mb-1">🔗 On-Chain (35%)</div>
+                            <div class="space-y-0.5 text-[11px]">
+                                <div class="flex justify-between"><span class="text-gray-500">Holders</span><span class="text-white font-mono">${oc.holder?.score ?? '--'}</span></div>
+                                <div class="flex justify-between"><span class="text-gray-500">Security</span><span class="text-white font-mono">${oc.security?.score ?? '--'}</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    ${redFlags.length ? `
+                    <div class="mb-2">
+                        <div class="text-[10px] text-red-400 font-bold mb-1">🔴 Red Flags</div>
+                        <div class="space-y-0.5">${redFlags.map(f => `<div class="text-[11px] text-gray-400 p-1 bg-red-500/5 rounded truncate">${escapeHtml(f)}</div>`).join('')}</div>
+                    </div>` : ''}
+                    ${data.tx_hash ? `
+                    <div class="flex items-center gap-1.5 mt-2 pt-2 border-t border-white/5">
+                        <i data-lucide="cpu" class="w-3 h-3 text-secondary"></i>
+                        <a href="https://explorer.opengradient.ai/tx/${data.tx_hash}" target="_blank" class="text-[10px] text-secondary hover:underline">Verified on OpenGradient</a>
+                    </div>` : ''}
+                </div>
+            `;
+            messagesDiv.appendChild(div);
+            lucide.createIcons();
+            scrollToBottom();
+        }
+
+        // ── Actions ──────────────────────────────────────────────────────────
+        async function sendMessage() {
+            if (!chatInput) return;
+            const msg = chatInput.value.trim();
+            if (!msg || isProcessing) return;
+
+            isProcessing = true;
+            if (sendBtn) sendBtn.disabled = true;
+            chatInput.value = '';
+            chatInput.style.height = 'auto';
+
+            appendUserMessage(msg);
+            const typingId = showTyping();
+
+            try {
+                const model = llmSelect?.value || 'anthropic/claude-4.0-sonnet';
+
+                const resp = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: msg,
+                        history: chatHistory.slice(-20),
+                        llm_model: model,
+                    })
+                });
+
+                removeTyping(typingId);
+                if (!resp.ok) throw new Error('Request failed');
+
+                const data = await resp.json();
+                chatHistory.push({ role: 'user', content: msg });
+                chatHistory.push({ role: 'assistant', content: data.content });
+
+                if (data.analysis_data) appendAnalysisCard(data.analysis_data);
+                appendAIMessage(data.content);
+
+            } catch (err) {
+                removeTyping(typingId);
+                appendAIMessage(`⚠️ Error: ${err.message}`);
+                console.error('Send Error:', err);
+            }
+
+            isProcessing = false;
+            if (sendBtn) sendBtn.disabled = false;
+            chatInput.focus();
+        }
+
+        function quickAnalyze(address) {
+            if (!chatInput) return;
+            chatInput.value = address;
+            sendMessage();
+        }
+
+        async function loadTrending() {
+            try {
+                const resp = await fetch('/api/trending/dex/solana?limit=6');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const items = data?.trending || [];
+                const container = document.getElementById('trendingChips');
+                if (!container) return;
+                
+                let html = '<span class="text-xs text-gray-600 whitespace-nowrap">Trending:</span>';
+                items.forEach(it => {
+                    html += `<button type="button" class="trending-chip px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-gray-400 hover:text-white text-xs font-mono transition" data-addr="${it.address}">$${(it.symbol||'').toUpperCase()}</button>`;
+                });
+                container.innerHTML = html;
+                
+                // Add click listeners to new chips
+                container.querySelectorAll('.trending-chip').forEach(btn => {
+                    btn.addEventListener('click', () => quickAnalyze(btn.dataset.addr));
+                });
+            } catch (e) {
+                console.warn('Trending Load Failed:', e);
+            }
+        }
+
+        // ── Initialization ────────────────────────────────────────────────────
+        window.addEventListener('DOMContentLoaded', () => {
+            // Textarea auto-resize
+            if (chatInput) {
+                chatInput.addEventListener('input', () => {
+                    chatInput.style.height = 'auto';
+                    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+                });
+
+                chatInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
+
+            // Send button click
+            if (sendBtn) {
+                sendBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    sendMessage();
+                });
+            }
+
+            loadTrending();
+            lucide.createIcons();
+        });
+    </script>
+</body>
+</html>
