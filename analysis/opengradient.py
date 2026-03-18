@@ -757,6 +757,10 @@ class OpenGradientAnalyzer:
         "openai/gpt-4.1-2025-04-14",
         "anthropic/claude-3.5-haiku",
     ]
+    # OpenGradient Endpoints
+    OG_LLM_DOMAIN = "llm.opengradient.ai"
+    OG_LLM_FALLBACK_IPS = ["13.59.207.188", "3.15.214.21"]
+    
     DEFAULT_MODEL = "anthropic/claude-4.0-sonnet"
     REQUIRE_X402_TX = False
 
@@ -776,14 +780,32 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
 
-            # Use official LLM endpoint https://llm.opengradient.ai
-            # The httpx monkeypatch above bypasses potential self-signed cert SSL errors
-            self._client = og.Client(
-                private_key=private_key,
-                og_llm_server_url="https://llm.opengradient.ai",
-                og_llm_streaming_server_url="https://llm.opengradient.ai"
-            )
-            self._initialized = True
+            # Endpoints to try: Domain first, then fallback IPs
+            endpoints = [f"https://{self.OG_LLM_DOMAIN}"] + [f"https://{ip}" for ip in self.OG_LLM_FALLBACK_IPS]
+            
+            last_err = None
+            success = False
+            
+            for endpoint in endpoints:
+                try:
+                    logger.info(f"Initializing OpenGradient client via {endpoint}...")
+                    # The httpx monkeypatch above bypasses potential self-signed cert SSL errors
+                    self._client = og.Client(
+                        private_key=private_key,
+                        og_llm_server_url=endpoint,
+                        og_llm_streaming_server_url=endpoint
+                    )
+                    self._initialized = True
+                    logger.info(f"✅ OpenGradient client initialized via {endpoint}")
+                    success = True
+                    break
+                except Exception as endpoint_err:
+                    last_err = endpoint_err
+                    logger.warning(f"⚠️ OpenGradient init endpoint {endpoint} failed: {endpoint_err}")
+                    continue
+            
+            if not success:
+                raise last_err or Exception("All OpenGradient init endpoints failed")
             
             # Ensure OPG approval before inference (SDK 0.7.1+ only)
             try:
@@ -877,35 +899,50 @@ class OpenGradientAnalyzer:
 
         try:
             private_key = _resolve_private_key()
-            client = og.Client(
-                private_key=private_key,
-                og_llm_server_url="https://llm.opengradient.ai",
-                og_llm_streaming_server_url="https://llm.opengradient.ai"
-            )
+            
+            # Endpoints to try: Domain first, then fallback IPs
+            endpoints = [f"https://{self.OG_LLM_DOMAIN}"] + [f"https://{ip}" for ip in self.OG_LLM_FALLBACK_IPS]
+            
+            last_err = None
+            for endpoint in endpoints:
+                try:
+                    logger.info(f"Connecting to OpenGradient via {endpoint}...")
+                    client = og.Client(
+                        private_key=private_key,
+                        og_llm_server_url=endpoint,
+                        og_llm_streaming_server_url=endpoint
+                    )
 
-            settlement_mode = _resolve_settlement_mode(
-                og.x402SettlementMode, require_onchain=False
-            )
+                    settlement_mode = _resolve_settlement_mode(
+                        og.x402SettlementMode, require_onchain=False
+                    )
 
-            chat_kwargs = {
-                "model": model_str,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.4,
-            }
-            if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
+                    chat_kwargs = {
+                        "model": model_str,
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                        "temperature": 0.4,
+                    }
+                    if settlement_mode is not None:
+                        chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            result = client.llm.chat(**chat_kwargs)
+                    result = client.llm.chat(**chat_kwargs)
 
-            content = getattr(result.chat_output, "content", None)
-            if isinstance(result.chat_output, dict):
-                content = result.chat_output.get("content")
-            if content is None and isinstance(result.chat_output, str):
-                content = result.chat_output
+                    content = getattr(result.chat_output, "content", None)
+                    if isinstance(result.chat_output, dict):
+                        content = result.chat_output.get("content")
+                    if content is None and isinstance(result.chat_output, str):
+                        content = result.chat_output
 
-            logger.info(f"✅ Chat completion OK: {len(content or '')} chars")
-            return {"content": content or "", "error": None}
+                    logger.info(f"✅ Chat completion OK via {endpoint}: {len(content or '')} chars")
+                    return {"content": content or "", "error": None}
+                except Exception as endpoint_err:
+                    last_err = endpoint_err
+                    logger.warning(f"⚠️ OpenGradient endpoint {endpoint} failed: {endpoint_err}")
+                    continue
+            
+            # If we reach here, all endpoints failed
+            raise last_err or Exception("All OpenGradient endpoints failed")
 
         except Exception as e:
             logger.error(f"❌ Chat completion error: {e}")
@@ -1007,40 +1044,59 @@ class OpenGradientAnalyzer:
         verification: Optional[dict[str, Any]] = None
 
         try:
-            # Match og-chat-backend exactly: Local client, no stream, no settlement mode
             private_key = _resolve_private_key()
-            client = og.Client(
-                private_key=private_key,
-                og_llm_server_url="https://llm.opengradient.ai",
-                og_llm_streaming_server_url="https://llm.opengradient.ai"
-            )
             
-            chat_kwargs = {
-                "model": model_str,
-                "messages": messages,
-                "max_tokens": 2000,
-                "temperature": 0.1,
-            }
-            if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
+            # Endpoints to try: Domain first, then fallback IPs
+            endpoints = [f"https://{self.OG_LLM_DOMAIN}"] + [f"https://{ip}" for ip in self.OG_LLM_FALLBACK_IPS]
+            
+            last_err = None
+            success = False
+            
+            for endpoint in endpoints:
+                try:
+                    logger.info(f"Connecting to OpenGradient stream via {endpoint}...")
+                    client = og.Client(
+                        private_key=private_key,
+                        og_llm_server_url=endpoint,
+                        og_llm_streaming_server_url=endpoint
+                    )
+                    
+                    chat_kwargs = {
+                        "model": model_str,
+                        "messages": messages,
+                        "max_tokens": 2000,
+                        "temperature": 0.1,
+                    }
+                    if settlement_mode is not None:
+                        chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            result = client.llm.chat(**chat_kwargs)
+                    result = client.llm.chat(**chat_kwargs)
+                    
+                    content = getattr(result.chat_output, "content", None)
+                    if isinstance(result.chat_output, dict):
+                        content = result.chat_output.get("content")
+                        
+                    tx_hash = _extract_tx_hash(result.payment_response if hasattr(result, "payment_response") else result)
+                    payment_hash = getattr(result, "payment_hash", None)
+                    tee_sig = getattr(result, "tee_signature", None)
+                    tee_ts = getattr(result, "tee_timestamp", None)
+                    verification = {"tee_signature": tee_sig, "tee_timestamp": tee_ts} if tee_sig else None
+                    
+                    raw_parts.append(content or "")
+                    
+                    # Yield the entire block at once for the frontend
+                    if content:
+                        yield {"type": "chunk", "content": content}
+                        
+                    success = True
+                    break
+                except Exception as endpoint_err:
+                    last_err = endpoint_err
+                    logger.warning(f"⚠️ OpenGradient stream endpoint {endpoint} failed: {endpoint_err}")
+                    continue
             
-            content = getattr(result.chat_output, "content", None)
-            if isinstance(result.chat_output, dict):
-                content = result.chat_output.get("content")
-                
-            tx_hash = _extract_tx_hash(result.payment_response if hasattr(result, "payment_response") else result)
-            payment_hash = getattr(result, "payment_hash", None)
-            tee_sig = getattr(result, "tee_signature", None)
-            tee_ts = getattr(result, "tee_timestamp", None)
-            verification = {"tee_signature": tee_sig, "tee_timestamp": tee_ts} if tee_sig else None
-            
-            raw_parts.append(content or "")
-            
-            # Yield the entire block at once for the frontend
-            if content:
-                yield {"type": "chunk", "content": content}
+            if not success:
+                raise last_err or Exception("All OpenGradient stream endpoints failed")
                 
         except Exception as e:
             stream_error = str(e)
@@ -1189,22 +1245,41 @@ class OpenGradientAnalyzer:
             
             # Match og-chat-backend exactly: Local client
             private_key = _resolve_private_key()
-            client = og.Client(
-                private_key=private_key,
-                og_llm_server_url="https://llm.opengradient.ai",
-                og_llm_streaming_server_url="https://llm.opengradient.ai"
-            )
             
-            chat_kwargs = {
-                "model": model_str,
-                "messages": messages,
-                "max_tokens": 2000,
-                "temperature": 0.1,
-            }
-            if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
+            # Endpoints to try: Domain first, then fallback IPs
+            endpoints = [f"https://{self.OG_LLM_DOMAIN}"] + [f"https://{ip}" for ip in self.OG_LLM_FALLBACK_IPS]
+            
+            last_err = None
+            success = False
+            
+            for endpoint in endpoints:
+                try:
+                    logger.info(f"Connecting to OpenGradient inference via {endpoint}...")
+                    client = og.Client(
+                        private_key=private_key,
+                        og_llm_server_url=endpoint,
+                        og_llm_streaming_server_url=endpoint
+                    )
+                    
+                    chat_kwargs = {
+                        "model": model_str,
+                        "messages": messages,
+                        "max_tokens": 2000,
+                        "temperature": 0.1,
+                    }
+                    if settlement_mode is not None:
+                        chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            completion = client.llm.chat(**chat_kwargs)
+                    completion = client.llm.chat(**chat_kwargs)
+                    success = True
+                    break
+                except Exception as endpoint_err:
+                    last_err = endpoint_err
+                    logger.warning(f"⚠️ OpenGradient inference endpoint {endpoint} failed: {endpoint_err}")
+                    continue
+            
+            if not success:
+                raise last_err or Exception("All OpenGradient inference endpoints failed")
             
             # Extract from completion object
             tx_hash = _extract_tx_hash(completion)
