@@ -105,20 +105,22 @@ def _resolve_settlement_mode(mode_enum: Any, *, require_onchain: bool = False):
         return None
 
     if require_onchain:
+        # Prioritize INDIVIDUAL_FULL or SETTLE_METADATA for on-chain verifiable tasks
         preferred = [
-            "SETTLE_INDIVIDUAL_WITH_METADATA",
-            "SETTLE_METADATA",
+            "INDIVIDUAL_FULL",                # Latest SDK (v0.8.0+)
+            "SETTLE_METADATA",                # Standard SDK naming
+            "SETTLE_INDIVIDUAL_WITH_METADATA",# Legacy alias
             "SETTLE_INDIVIDUAL",
             "SETTLE",
             "SETTLE_ONCHAIN",
-            "SETTLE_PRIVATE",
-            "SETTLE_TX",
-            "SETTLE_PAYMENT",
             "SETTLE_BATCH",
         ]
     else:
+        # Prioritize BATCH_HASHED or SETTLE_BATCH for typical off-chain tasks
         preferred = [
-            "SETTLE_BATCH",
+            "BATCH_HASHED",                   # Latest SDK
+            "SETTLE_BATCH",                   # Standard
+            "PRIVATE",                        # Latest SDK
             "SETTLE_INDIVIDUAL",
             "SETTLE",
             "SETTLE_INDIVIDUAL_WITH_METADATA",
@@ -536,7 +538,8 @@ class SafeOpenGradientLLM(BaseChatModel):
             if settlement_mode is not None:
                 chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-            res = getattr(self.client, "llm").chat(
+            client_llm = getattr(self.client, "llm")
+            res = client_llm.chat(
                 **chat_kwargs,
             )
         except Exception as e:
