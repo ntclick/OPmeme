@@ -50,10 +50,11 @@ else:
 import opengradient as og
 
 # ── NUCLEAR SSL BYPASS for Railway ────────────────────────────────────────────
-# The OpenGradient SDK connects to TEE nodes via IP (3.15.214.21) which uses
-# a self-signed certificate. The SDK creates its own ssl.SSLContext internally,
-# so httpx-level patches (verify=False) are overridden. We must patch at the
-# Python ssl module level to ensure ALL SSL contexts skip cert verification.
+# The OpenGradient SDK connects to TEE nodes via https://llm.opengradient.ai
+# which may use specific certificates. The SDK creates its own ssl.SSLContext
+# internally, so httpx-level patches (verify=False) are overridden.
+# We must patch at the Python ssl module level to ensure ALL SSL contexts
+# skip cert verification if needed for TEE nodes.
 # TEE attestation provides the actual security guarantee, not TLS certs.
 import httpx
 
@@ -775,9 +776,13 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
 
-            # Use SDK default IP (which bypasses Railway DNS issues)
-            # The httpx monkeypatch above bypasses the self-signed cert SSL error
-            self._client = og.Client(private_key=private_key)
+            # Use official LLM endpoint https://llm.opengradient.ai
+            # The httpx monkeypatch above bypasses potential self-signed cert SSL errors
+            self._client = og.Client(
+                private_key=private_key,
+                og_llm_server_url="https://llm.opengradient.ai",
+                og_llm_streaming_server_url="https://llm.opengradient.ai"
+            )
             self._initialized = True
             
             # Ensure OPG approval before inference (SDK 0.7.1+ only)
