@@ -98,40 +98,29 @@ from utils.cache import cache, CacheKeys, CacheTTL
 logger = logging.getLogger(__name__)
 
 
-def _resolve_settlement_mode(mode_enum: Any, *, require_onchain: bool = False):
-    """Pick best available settlement mode across SDK enum naming variants."""
-
-    if mode_enum is None:
+def _get_settlement_mode(require_onchain: bool = False):
+    """Get the correct x402 settlement mode.
+    
+    Aligns with official SDK example (llm_chat.py) which uses:
+        og.x402SettlementMode.INDIVIDUAL_FULL
+    
+    In our SDK version, INDIVIDUAL_FULL = SETTLE_METADATA = 'individual'
+    """
+    try:
+        if require_onchain:
+            # For on-chain verifiable tasks, use INDIVIDUAL_FULL (= SETTLE_METADATA)
+            # This matches the official example: og.x402SettlementMode.INDIVIDUAL_FULL
+            if hasattr(og.x402SettlementMode, 'INDIVIDUAL_FULL'):
+                return og.x402SettlementMode.INDIVIDUAL_FULL
+            return og.x402SettlementMode.SETTLE_METADATA
+        else:
+            # For simple chat, use SETTLE_BATCH for efficiency
+            if hasattr(og.x402SettlementMode, 'BATCH_HASHED'):
+                return og.x402SettlementMode.BATCH_HASHED
+            return og.x402SettlementMode.SETTLE_BATCH
+    except Exception:
         return None
 
-    if require_onchain:
-        # Prioritize INDIVIDUAL_FULL or SETTLE_METADATA for on-chain verifiable tasks
-        preferred = [
-            "INDIVIDUAL_FULL",                # Latest SDK (v0.8.0+)
-            "SETTLE_METADATA",                # Standard SDK naming
-            "SETTLE_INDIVIDUAL_WITH_METADATA",# Legacy alias
-            "SETTLE_INDIVIDUAL",
-            "SETTLE",
-            "SETTLE_ONCHAIN",
-            "SETTLE_BATCH",
-        ]
-    else:
-        # Prioritize BATCH_HASHED or SETTLE_BATCH for typical off-chain tasks
-        preferred = [
-            "BATCH_HASHED",                   # Latest SDK
-            "SETTLE_BATCH",                   # Standard
-            "PRIVATE",                        # Latest SDK
-            "SETTLE_INDIVIDUAL",
-            "SETTLE",
-            "SETTLE_INDIVIDUAL_WITH_METADATA",
-            "SETTLE_METADATA",
-        ]
-
-    for name in preferred:
-        if hasattr(mode_enum, name):
-            return getattr(mode_enum, name)
-
-    return None
 
 
 def _settlement_mode_name(value: Any) -> Optional[str]:
@@ -519,7 +508,7 @@ class SafeOpenGradientLLM(BaseChatModel):
 
         # 3. Call SDK synchronously
         try:
-            settlement_mode = _resolve_settlement_mode(og.x402SettlementMode, require_onchain=False)
+            settlement_mode = _get_settlement_mode(require_onchain=False)
             # Map model enum to Model ID
             model_id_map = {
                 "GPT_4O": "openai/gpt-4o",
@@ -761,10 +750,14 @@ class OpenGradientAnalyzer:
         "anthropic/claude-3.5-haiku",
     ]
     # OpenGradient Endpoints
-    OG_LLM_DOMAIN = "13.59.207.188"
-    OG_LLM_FALLBACK_IPS = ["llm.opengradient.ai", "3.15.214.21"]
+    # Endpoints: domain first, then fallback IPs
+    OG_LLM_DOMAIN = "llm.opengradient.ai"
+    OG_LLM_FALLBACK_IPS = ["13.59.207.188", "3.15.214.21"]
     
-    DEFAULT_MODEL = "anthropic/claude-4.0-sonnet"
+    # Default model aligned with official example (og.TEE_LLM.GEMINI_2_5_FLASH)
+    DEFAULT_MODEL = "google/gemini-2.5-flash"
+    # Fallback model if Gemini is unavailable
+    FALLBACK_MODEL = "anthropic/claude-4.0-sonnet"
     REQUIRE_X402_TX = False
 
     def __init__(self):
@@ -916,9 +909,7 @@ class OpenGradientAnalyzer:
                         og_llm_streaming_server_url=endpoint
                     )
 
-                    settlement_mode = _resolve_settlement_mode(
-                        og.x402SettlementMode, require_onchain=False
-                    )
+                    settlement_mode = _get_settlement_mode(require_onchain=False)
 
                     chat_kwargs = {
                         "model": model_str,
@@ -1035,9 +1026,7 @@ class OpenGradientAnalyzer:
         # Pass model as string directly (like og-chat-backend reference)
         # SDK 0.7.5 accepts model ID strings: "openai/gpt-4o"
         model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
-        settlement_mode = _resolve_settlement_mode(
-            og.x402SettlementMode, require_onchain=True
-        )
+        settlement_mode = _get_settlement_mode(require_onchain=True)
         settlement_mode_name = _settlement_mode_name(settlement_mode)
 
         stream_error: Optional[str] = None
@@ -1241,9 +1230,7 @@ class OpenGradientAnalyzer:
             # Pass model as string directly (like og-chat-backend reference)
             model_str = selected_model if "/" in selected_model else self.DEFAULT_MODEL
             # Use client.llm.chat() - SDK 0.7.5 accepts model ID strings
-            settlement_mode = _resolve_settlement_mode(
-                og.x402SettlementMode, require_onchain=True
-            )
+            settlement_mode = _get_settlement_mode(require_onchain=True)
             settlement_mode_name = _settlement_mode_name(settlement_mode)
             
             # Match og-chat-backend exactly: Local client
