@@ -877,7 +877,11 @@ class OpenGradientAnalyzer:
 
         try:
             private_key = _resolve_private_key()
-            client = og.Client(private_key=private_key)
+            client = og.Client(
+                private_key=private_key,
+                og_llm_server_url="https://llm.opengradient.ai",
+                og_llm_streaming_server_url="https://llm.opengradient.ai"
+            )
 
             settlement_mode = _resolve_settlement_mode(
                 og.x402SettlementMode, require_onchain=False
@@ -1005,7 +1009,11 @@ class OpenGradientAnalyzer:
         try:
             # Match og-chat-backend exactly: Local client, no stream, no settlement mode
             private_key = _resolve_private_key()
-            client = og.Client(private_key=private_key)
+            client = og.Client(
+                private_key=private_key,
+                og_llm_server_url="https://llm.opengradient.ai",
+                og_llm_streaming_server_url="https://llm.opengradient.ai"
+            )
             
             chat_kwargs = {
                 "model": model_str,
@@ -1181,7 +1189,11 @@ class OpenGradientAnalyzer:
             
             # Match og-chat-backend exactly: Local client
             private_key = _resolve_private_key()
-            client = og.Client(private_key=private_key)
+            client = og.Client(
+                private_key=private_key,
+                og_llm_server_url="https://llm.opengradient.ai",
+                og_llm_streaming_server_url="https://llm.opengradient.ai"
+            )
             
             chat_kwargs = {
                 "model": model_str,
