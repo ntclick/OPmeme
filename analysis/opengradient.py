@@ -758,8 +758,8 @@ class OpenGradientAnalyzer:
         "anthropic/claude-3.5-haiku",
     ]
     # OpenGradient Endpoints
-    OG_LLM_DOMAIN = "llm.opengradient.ai"
-    OG_LLM_FALLBACK_IPS = ["13.59.207.188", "3.15.214.21"]
+    OG_LLM_DOMAIN = "13.59.207.188"
+    OG_LLM_FALLBACK_IPS = ["llm.opengradient.ai", "3.15.214.21"]
     
     DEFAULT_MODEL = "anthropic/claude-4.0-sonnet"
     REQUIRE_X402_TX = False
