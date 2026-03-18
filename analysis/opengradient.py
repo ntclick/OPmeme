@@ -506,39 +506,46 @@ class SafeOpenGradientLLM(BaseChatModel):
                 tool_desc += f"- {t.name}: {t.description}\n"
             formatted_msgs[0]["content"] += tool_desc
 
-        # 3. Call SDK synchronously
-        try:
-            settlement_mode = _get_settlement_mode(require_onchain=False)
-            # Map model enum to Model ID
-            model_id_map = {
-                "GPT_4O": "openai/gpt-4o",
-                "GPT_4_1_2025_04_14": "openai/gpt-4.1-2025-04-14",
-                "O4_MINI": "openai/o4-mini",
-                "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
-                "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
-                "GEMINI_2_5_FLASH": "google/gemini-2.5-flash",
-                "GEMINI_2_5_PRO": "google/gemini-2.5-pro",
-                "GEMINI_2_0_FLASH": "google/gemini-2.0-flash",
-                "GEMINI_2_5_FLASH_LITE": "google/gemini-2.5-flash-lite",
-            }
-            model_cid = model_id_map.get(self.model_enum, "openai/gpt-4o")
-            chat_kwargs = {
-                "model": model_cid,
-                "messages": formatted_msgs,
-                "max_tokens": 800,
-                "temperature": 0.3,
-            }
-            if settlement_mode is not None:
-                chat_kwargs["x402_settlement_mode"] = settlement_mode
+        # 3. Call SDK with fallback across endpoints
+        last_err = None
+        success = False
+        res = None
+        
+        # Access the client's original private key and endpoints list
+        # Note: We rely on the class constants for fallback IPs
+        from config import OPENGRADIENT_PRIVATE_KEY
+        private_key = OPENGRADIENT_PRIVATE_KEY or os.getenv("OG_PRIVATE_KEY")
+        
+        # Use simple domain/IP approach as in other methods
+        domain = "llm.opengradient.ai"
+        fallbacks = ["13.59.207.188", "3.15.214.21"]
+        endpoints = [f"https://{domain}"] + [f"https://{ip}" for ip in fallbacks]
+        
+        for endpoint in endpoints:
+            try:
+                # We need to recreate the client for each endpoint trial if old one failed
+                client = og.Client(
+                    private_key=private_key,
+                    og_llm_server_url=endpoint,
+                    og_llm_streaming_server_url=endpoint
+                )
+                client_llm = getattr(client, "llm")
+                
+                res = client_llm.chat(**chat_kwargs)
+                success = True
+                break
+            except Exception as e:
+                last_err = e
+                err_msg = str(e)
+                if "402" in err_msg or "Payment Required" in err_msg:
+                    err_msg += " — Wallet needs $OPG tokens. Fund at https://faucet.opengradient.ai/"
+                logger.warning(f"⚠️ SafeOpenGradientLLM: Endpoint {endpoint} failed: {err_msg}")
+                continue
 
-            client_llm = getattr(self.client, "llm")
-            res = client_llm.chat(
-                **chat_kwargs,
-            )
-        except Exception as e:
-            logger_err = f"TEE SDK Error: {e}"
+        if not success:
+            logger_err = f"All OpenGradient endpoints failed in SafeOpenGradientLLM: {last_err}"
             logger.error(logger_err)
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=""))])
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=f"Error: {last_err}"))])
 
         logger.info(f"OpenGradient raw response object: {res}")
         logger.info(f"OpenGradient chat_output: {res.chat_output}")
@@ -754,7 +761,7 @@ class OpenGradientAnalyzer:
         "anthropic/claude-3.5-haiku",
     ]
     # OpenGradient Endpoints
-    # Endpoints: domain first, then fallback IPs
+    # Endpoints: domain first, then fallback IPs (per user request)
     OG_LLM_DOMAIN = "llm.opengradient.ai"
     OG_LLM_FALLBACK_IPS = ["13.59.207.188", "3.15.214.21"]
     
