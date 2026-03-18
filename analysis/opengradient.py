@@ -516,6 +516,10 @@ class SafeOpenGradientLLM(BaseChatModel):
                 "O4_MINI": "openai/o4-mini",
                 "CLAUDE_3_5_HAIKU": "anthropic/claude-3.5-haiku",
                 "CLAUDE_SONNET_4_5": "anthropic/claude-4.0-sonnet",
+                "GEMINI_2_5_FLASH": "google/gemini-2.5-flash",
+                "GEMINI_2_5_PRO": "google/gemini-2.5-pro",
+                "GEMINI_2_0_FLASH": "google/gemini-2.0-flash",
+                "GEMINI_2_5_FLASH_LITE": "google/gemini-2.5-flash-lite",
             }
             model_cid = model_id_map.get(self.model_enum, "openai/gpt-4o")
             chat_kwargs = {
@@ -807,7 +811,8 @@ class OpenGradientAnalyzer:
             try:
                 if hasattr(self._client, 'llm') and hasattr(self._client.llm, 'ensure_opg_approval'):
                     logger.info("🔍 Checking OPG approval via client.llm...")
-                    approval = self._client.llm.ensure_opg_approval(opg_amount=420.0)
+                    logger.info("🔍 Checking OPG approval (requesting 0.1 OPG to match official example)...")
+                    approval = self._client.llm.ensure_opg_approval(opg_amount=0.1)
                     if approval.tx_hash:
                         logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
                     else:
@@ -939,8 +944,16 @@ class OpenGradientAnalyzer:
             raise last_err or Exception("All OpenGradient endpoints failed")
 
         except Exception as e:
-            logger.error(f"❌ Chat completion error: {e}")
-            return {"content": None, "error": str(e)}
+            err_str = str(e)
+            if "402" in err_str or "Payment Required" in err_str:
+                err_ext = (
+                    " — Your wallet may have insufficient $OPG tokens or Permit2 approval. "
+                    "Please fund your wallet at https://faucet.opengradient.ai/ and try again."
+                )
+                err_str += err_ext
+            
+            logger.error(f"❌ Chat completion error: {err_str}")
+            return {"content": None, "error": err_str}
 
     async def analyze_coin(
         self,
@@ -1092,6 +1105,11 @@ class OpenGradientAnalyzer:
                 
         except Exception as e:
             stream_error = str(e)
+            if "402" in stream_error or "Payment Required" in stream_error:
+                stream_error += (
+                    " — Your wallet may have insufficient $OPG tokens or Permit2 approval. "
+                    "Please fund your wallet at https://faucet.opengradient.ai/ and try again."
+                )
 
             
         raw_output = "".join(raw_parts)
@@ -1336,7 +1354,9 @@ class OpenGradientAnalyzer:
                     "payment_hash": None,
                     "settlement_mode": None,
                     "verification": None,
-                    "error": str(e),
+                    "error": f"{e} — Your wallet may have insufficient $OPG tokens. "
+                             "Fund it at https://faucet.opengradient.ai/ "
+                             "Note: Falling back to IP because llm.opengradient.ai is currently not resolving.",
                 }
 
         # ════════════════════════════════════════════════════════════════════════
