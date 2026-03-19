@@ -99,27 +99,11 @@ logger = logging.getLogger(__name__)
 
 
 def _get_settlement_mode(require_onchain: bool = False):
-    """Get the correct x402 settlement mode.
-    
-    Aligns with official SDK example (llm_chat.py) which uses:
-        og.x402SettlementMode.INDIVIDUAL_FULL
-    
-    In our SDK version, INDIVIDUAL_FULL = SETTLE_METADATA = 'individual'
-    """
-    try:
-        if require_onchain:
-            # For on-chain verifiable tasks, use INDIVIDUAL_FULL (= SETTLE_METADATA)
-            # This matches the official example: og.x402SettlementMode.INDIVIDUAL_FULL
-            if hasattr(og.x402SettlementMode, 'INDIVIDUAL_FULL'):
-                return og.x402SettlementMode.INDIVIDUAL_FULL
-            return og.x402SettlementMode.SETTLE_METADATA
-        else:
-            # For simple chat, use SETTLE_BATCH for efficiency
-            if hasattr(og.x402SettlementMode, 'BATCH_HASHED'):
-                return og.x402SettlementMode.BATCH_HASHED
-            return og.x402SettlementMode.SETTLE_BATCH
-    except Exception:
-        return None
+    """ Get the correct x402 settlement mode for v0.8.0+ """
+    if require_onchain:
+        return og.x402SettlementMode.INDIVIDUAL_FULL
+    else:
+        return og.x402SettlementMode.BATCH_HASHED
 
 
 
@@ -517,21 +501,22 @@ class SafeOpenGradientLLM(BaseChatModel):
         private_key = OPENGRADIENT_PRIVATE_KEY or os.getenv("OG_PRIVATE_KEY")
         
         # Use simple domain/IP approach as in other methods
+        # Use simple domain/IP approach as in other methods
         domain = "llm.opengradient.ai"
+        # Prioritize 13.59.207.188 per user request
         fallbacks = ["13.59.207.188", "3.15.214.21"]
         endpoints = [f"https://{domain}"] + [f"https://{ip}" for ip in fallbacks]
         
         for endpoint in endpoints:
             try:
                 # We need to recreate the client for each endpoint trial if old one failed
-                client = og.Client(
+                llm = og.LLM(
                     private_key=private_key,
-                    og_llm_server_url=endpoint,
-                    og_llm_streaming_server_url=endpoint
+                    llm_server_url=endpoint
                 )
-                client_llm = getattr(client, "llm")
                 
-                res = client_llm.chat(**chat_kwargs)
+                # In 0.8.0, chat is async
+                res = asyncio.run(llm.chat(**chat_kwargs))
                 success = True
                 break
             except Exception as e:
@@ -787,23 +772,23 @@ class OpenGradientAnalyzer:
         try:
             self._og = og
 
-            # Endpoints to try: Domain first, then fallback IPs
-            endpoints = [f"https://{self.OG_LLM_DOMAIN}"] + [f"https://{ip}" for ip in self.OG_LLM_FALLBACK_IPS]
+            # Endpoints to try: Domain first, then fallback IPs (Prioritize 13.59.207.188)
+            fallbacks = ["13.59.207.188", "3.15.214.21"]
+            endpoints = [f"https://{self.OG_LLM_DOMAIN}"] + [f"https://{ip}" for ip in fallbacks]
             
             last_err = None
             success = False
             
             for endpoint in endpoints:
                 try:
-                    logger.info(f"Initializing OpenGradient client via {endpoint}...")
-                    # The httpx monkeypatch above bypasses potential self-signed cert SSL errors
-                    self._client = og.Client(
+                    logger.info(f"Initializing OpenGradientLLM (0.8.0) via {endpoint}...")
+                    # In 0.8.0, we use og.LLM directly
+                    self._llm_instance = og.LLM(
                         private_key=private_key,
-                        og_llm_server_url=endpoint,
-                        og_llm_streaming_server_url=endpoint
+                        llm_server_url=endpoint
                     )
                     self._initialized = True
-                    logger.info(f"✅ OpenGradient client initialized via {endpoint}")
+                    logger.info(f"✅ OpenGradient LLM initialized via {endpoint}")
                     success = True
                     break
                 except Exception as endpoint_err:
@@ -814,18 +799,15 @@ class OpenGradientAnalyzer:
             if not success:
                 raise last_err or Exception("All OpenGradient init endpoints failed")
             
-            # Ensure OPG approval before inference (SDK 0.7.1+ only)
+            # Ensure OPG approval before inference
             try:
-                if hasattr(self._client, 'llm') and hasattr(self._client.llm, 'ensure_opg_approval'):
-                    logger.info("🔍 Checking OPG approval via client.llm...")
-                    logger.info("🔍 Checking OPG approval (requesting 0.1 OPG to match official example)...")
-                    approval = self._client.llm.ensure_opg_approval(opg_amount=0.1)
-                    if approval.tx_hash:
-                        logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
-                    else:
-                        logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
+                logger.info("🔍 Checking OPG approval (requesting 0.1 OPG)...")
+                # self._llm_instance is the og.LLM object in 0.8.0
+                approval = self._llm_instance.ensure_opg_approval(opg_amount=0.1)
+                if approval.tx_hash:
+                    logger.info(f"✅ [PERMIT2] Approval TX: {approval.tx_hash}")
                 else:
-                    logger.info("ℹ️ ensure_opg_approval not available in this SDK version, skipping")
+                    logger.info(f"✅ [PERMIT2] Already approved: {approval.allowance_before}")
             except Exception as e:
                 logger.warning(f"⚠️ Permit2 approval failed: {e}")
 
@@ -915,10 +897,9 @@ class OpenGradientAnalyzer:
             for endpoint in endpoints:
                 try:
                     logger.info(f"Connecting to OpenGradient via {endpoint}...")
-                    client = og.Client(
+                    llm = og.LLM(
                         private_key=private_key,
-                        og_llm_server_url=endpoint,
-                        og_llm_streaming_server_url=endpoint
+                        llm_server_url=endpoint
                     )
 
                     settlement_mode = _get_settlement_mode(require_onchain=False)
@@ -932,7 +913,8 @@ class OpenGradientAnalyzer:
                     if settlement_mode is not None:
                         chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-                    result = client.llm.chat(**chat_kwargs)
+                    # In 0.8.0, chat is async
+                    result = await llm.chat(**chat_kwargs)
 
                     content = getattr(result.chat_output, "content", None)
                     if isinstance(result.chat_output, dict):
@@ -1067,10 +1049,9 @@ class OpenGradientAnalyzer:
             for endpoint in endpoints:
                 try:
                     logger.info(f"Connecting to OpenGradient stream via {endpoint}...")
-                    client = og.Client(
+                    llm = og.LLM(
                         private_key=private_key,
-                        og_llm_server_url=endpoint,
-                        og_llm_streaming_server_url=endpoint
+                        llm_server_url=endpoint
                     )
                     
                     chat_kwargs = {
@@ -1078,27 +1059,19 @@ class OpenGradientAnalyzer:
                         "messages": messages,
                         "max_tokens": 2000,
                         "temperature": 0.1,
+                        "stream": True
                     }
                     if settlement_mode is not None:
                         chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-                    result = client.llm.chat(**chat_kwargs)
+                    stream = await llm.chat(**chat_kwargs)
                     
-                    content = getattr(result.chat_output, "content", None)
-                    if isinstance(result.chat_output, dict):
-                        content = result.chat_output.get("content")
-                        
-                    tx_hash = _extract_tx_hash(result.payment_response if hasattr(result, "payment_response") else result)
-                    payment_hash = getattr(result, "payment_hash", None)
-                    tee_sig = getattr(result, "tee_signature", None)
-                    tee_ts = getattr(result, "tee_timestamp", None)
-                    verification = {"tee_signature": tee_sig, "tee_timestamp": tee_ts} if tee_sig else None
-                    
-                    raw_parts.append(content or "")
-                    
-                    # Yield the entire block at once for the frontend
-                    if content:
-                        yield {"type": "chunk", "content": content}
+                    # Yield chunks from async generator
+                    async for chunk in stream:
+                        content = getattr(chunk.choices[0].delta, "content", "")
+                        if content:
+                            raw_parts.append(content)
+                            yield {"type": "chunk", "content": content}
                         
                     success = True
                     break
@@ -1270,10 +1243,9 @@ class OpenGradientAnalyzer:
             for endpoint in endpoints:
                 try:
                     logger.info(f"Connecting to OpenGradient inference via {endpoint}...")
-                    client = og.Client(
+                    llm = og.LLM(
                         private_key=private_key,
-                        og_llm_server_url=endpoint,
-                        og_llm_streaming_server_url=endpoint
+                        llm_server_url=endpoint
                     )
                     
                     chat_kwargs = {
@@ -1285,7 +1257,8 @@ class OpenGradientAnalyzer:
                     if settlement_mode is not None:
                         chat_kwargs["x402_settlement_mode"] = settlement_mode
 
-                    completion = client.llm.chat(**chat_kwargs)
+                    # In 0.8.0, chat is async
+                    completion = await llm.chat(**chat_kwargs)
                     success = True
                     break
                 except Exception as endpoint_err:
