@@ -17,6 +17,31 @@ def _unverified_ssl_context(*args, **kwargs):
 ssl.create_default_context = _unverified_ssl_context
 
 import opengradient as og
+import x402.http.x402_http_client_base as x402_base
+from x402.http.utils import decode_payment_required_header
+from x402.schemas.v1 import PaymentRequiredV1
+
+# --- x402 PROTOCOL RESILIENCE PATCH ---
+# Fixes "Invalid payment required response" caused by duplicated/merged headers
+_orig_get_payment_required = x402_base.x402HTTPClientBase.get_payment_required_response
+
+def _resilient_get_payment_required(self, get_header, body=None):
+    # Try the standard header first
+    header = get_header("PAYMENT-REQUIRED") or get_header("X-PAYMENT-REQUIRED")
+    
+    if header:
+        # If headers are merged with commas (e.g. "base64, base64"), take the first one
+        if "," in header:
+            header = header.split(",")[0].strip()
+        try:
+            return decode_payment_required_header(header)
+        except Exception as e:
+            logging.warning(f"Failed to decode PAYMENT-REQUIRED header: {e}")
+
+    # Fallback to original logic for body parsing (V1)
+    return _orig_get_payment_required(self, get_header, body)
+
+x402_base.x402HTTPClientBase.get_payment_required_response = _resilient_get_payment_required
 
 # --- OpenGradient v2 Proper — Clean Integration ---
 # (Networking patches removed to preserve SDK x402 payment transport)

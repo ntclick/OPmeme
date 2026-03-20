@@ -243,29 +243,34 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
 
     # Official supported models from https://docs.opengradient.ai/developers/x402/
     allowed_llm_models = {
+        "openai/gpt-5",
+        "openai/gpt-5-2",
+        "openai/gpt-5-mini",
         "openai/gpt-4.1-2025-04-14",
         "openai/gpt-4o",
         "openai/o4-mini",
-        "anthropic/claude-4.0-sonnet",
-        "anthropic/claude-3.7-sonnet",
-        "anthropic/claude-3.5-haiku",
-        "google/gemini-2.5-flash",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-4-5",
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-haiku-4-5",
+        "google/gemini-3-pro",
+        "google/gemini-3-flash",
         "google/gemini-2.5-pro",
+        "google/gemini-2.5-flash",
         "google/gemini-2.5-flash-lite",
         "google/gemini-2.0-flash",
-        "x-ai/grok-3-beta",
-        "x-ai/grok-3-mini-beta",
+        "x-ai/grok-4",
+        "x-ai/grok-4-fast",
         "x-ai/grok-4.1-fast",
         "x-ai/grok-4-1-fast-non-reasoning",
-        "x-ai/grok-2-1212",
-        "x-ai/grok-2-vision-latest",
     }
 
     normalized_model = _normalize_llm_model(llm_model)
     if normalized_model and normalized_model not in allowed_llm_models:
         logger.warning(f"Invalid llm_model requested: {normalized_model}. Falling back to default.")
         normalized_model = None
-    effective_model = normalized_model or "anthropic/claude-4.0-sonnet"
+    effective_model = normalized_model or "anthropic/claude-sonnet-4-6"
     
     # Detect chain type
     chain_type = _detect_chain(contract_address or ticker)
