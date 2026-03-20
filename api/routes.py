@@ -65,6 +65,18 @@ tech_analyzer = TechnicalAnalyzer()
 liquidity_analyzer = LiquidityAnalyzer()
 opengradient_analyzer = OpenGradientAnalyzer()
 
+# OPT-3: Persistent HTTP client with connection pooling (reused across requests)
+_shared_http_client: httpx.AsyncClient | None = None
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        _shared_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+        )
+    return _shared_http_client
+
 
 class DexSearchRequest(BaseModel):
     query: str
@@ -304,32 +316,42 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         if not contract_address:
             logger.info(f"🔍 Searching DexScreener for {ticker}...")
             try:
-                async with httpx.AsyncClient() as client:
-                    search_resp = await client.get(
-                        f"https://api.dexscreener.com/latest/dex/search?q={ticker}",
-                        timeout=10.0
-                    )
-                    if search_resp.status_code == 200:
-                        search_data = search_resp.json()
-                        pairs = search_data.get("pairs", [])
+                client = _get_http_client()  # OPT-3: reuse persistent client
+                search_resp = await client.get(
+                    f"https://api.dexscreener.com/latest/dex/search?q={ticker}",
+                    timeout=10.0
+                )
+                if search_resp.status_code == 200:
+                    search_data = search_resp.json()
+                    pairs = search_data.get("pairs", [])
 
-                        # Filter by chain priority: solana, base, eth, bsc
-                        for target_chain in ["solana", "base", "ethereum", "bsc"]:
-                            chain_pairs = [p for p in pairs if p.get("chainId") == target_chain]
-                            if chain_pairs:
-                                chain_pairs.sort(key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0, reverse=True)
-                                best_pair = chain_pairs[0]
-                                base_token = best_pair.get("baseToken", {})
-                                if base_token.get("symbol", "").upper() == ticker:
-                                    contract_address = base_token.get("address")
-                                    chain_type = "solana" if target_chain == "solana" else "evm"
-                                    logger.info(f"✅ Resolved {ticker} → {contract_address[:8]}... ({target_chain})")
-                                    break
+                    # Filter by chain priority: solana, base, eth, bsc
+                    for target_chain in ["solana", "base", "ethereum", "bsc"]:
+                        chain_pairs = [p for p in pairs if p.get("chainId") == target_chain]
+                        if chain_pairs:
+                            chain_pairs.sort(key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0, reverse=True)
+                            best_pair = chain_pairs[0]
+                            base_token = best_pair.get("baseToken", {})
+                            if base_token.get("symbol", "").upper() == ticker:
+                                contract_address = base_token.get("address")
+                                chain_type = "solana" if target_chain == "solana" else "evm"
+                                logger.info(f"✅ Resolved {ticker} → {contract_address[:8]}... ({target_chain})")
+                                break
             except Exception as e:
                 logger.error(f"❌ DexScreener search failed: {e}")
 
     if not contract_address:
         raise HTTPException(status_code=400, detail="Unable to resolve contract address")
+
+    # OPT-1: Full analysis cache check — skip all API calls on cache hit
+    _full_cache_key = CacheKeys.full_analysis(contract_address, effective_model)
+    if not force_refresh:
+        _cached_result = await cache.get(_full_cache_key)
+        if _cached_result:
+            logger.info(f"⚡ Cache HIT full analysis: {contract_address[:8]}...")
+            _cached_result = dict(_cached_result)
+            _cached_result["cached"] = True
+            return AnalyzeResponse(**_cached_result)
 
     try:
         # ══════════════════════════════════════════════════════════════════════
@@ -345,9 +367,24 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         
         if contract_address:
             # 1. DexScreener (Universal - works for all chains)
-            logger.info(f"� Fetching DexScreener...")
-            try:
-                async with httpx.AsyncClient() as client:
+            # OPT-4: Check DexScreener cache first
+            _dex_cache_key = CacheKeys.dex_data(contract_address)
+            _dex_from_cache = False
+            if not force_refresh:
+                _dex_cached = await cache.get(_dex_cache_key)
+                if _dex_cached:
+                    dex_data = _dex_cached.get("dex_data", {})
+                    contract_address = _dex_cached.get("contract_address", contract_address)
+                    ticker = _dex_cached.get("ticker", ticker)
+                    token_age_hours = _dex_cached.get("token_age_hours")
+                    _dex_from_cache = True
+                    logger.info(f"⚡ DexScreener cache HIT: {contract_address[:8]}...")
+
+            if not _dex_from_cache:
+                logger.info(f"🌐 Fetching DexScreener...")
+                try:
+                    # OPT-3: reuse persistent client
+                    client = _get_http_client()
                     requested_addr = contract_address
                     requested_addr_l = requested_addr.lower() if isinstance(requested_addr, str) else ""
 
@@ -440,13 +477,21 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                             f"✅ DexScreener: Liq=${_safe_get(dex_data, 'liquidity', 'usd') or 0:,.0f}, "
                             f"Age={age_str}"
                         )
-            except Exception as e:
-                logger.warning(f"⚠️ DexScreener failed: {e}")
+
+                        # OPT-4: Save DexScreener data to cache
+                        await cache.set(_dex_cache_key, {
+                            "dex_data": dex_data,
+                            "contract_address": contract_address,
+                            "ticker": ticker,
+                            "token_age_hours": token_age_hours,
+                        }, CacheTTL.DEX_DATA)
+                except Exception as e:
+                    logger.warning(f"⚠️ DexScreener failed: {e}")
             
             # 2. Chain-specific data fetching
             if chain_type == "solana":
                 # Solana RPC FIRST - to resolve the mint address (Birdeye needs Base58)
-                logger.info(f"� Fetching Solana RPC for: {contract_address}")
+                logger.info(f"🔗 Fetching Solana RPC for: {contract_address}")
                 try:
                     token_info = await solana_scraper.get_token_info(contract_address)
                     if not token_info:
@@ -459,7 +504,6 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     if resolved_mint and resolved_mint != contract_address:
                         logger.info(f"🔧 Solana RPC resolved mint: {contract_address[:8]}... → {resolved_mint[:8]}...")
                         contract_address = resolved_mint
-                    holder_data = await solana_scraper.get_top_holders(contract_address) or {}
                     logger.info(f"✅ Solana RPC: mint_renounced={token_info.get('is_mint_renounced')}")
                 except HTTPException:
                     raise
@@ -469,30 +513,51 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                         status_code=502,
                         detail="Solana RPC validation failed. Unable to confirm this is a token mint address.",
                     )
-                
-                # Birdeye (Solana only) - AFTER address is resolved
-                logger.info(f"� Fetching Birdeye for address: {contract_address}")
-                try:
-                    cache_key = CacheKeys.birdeye_overview(contract_address)
-                    raw = None
-                    if not force_refresh:
-                        raw = await cache.get(cache_key)
-                    if not raw:
-                        raw = await birdeye_client.get_token_overview(contract_address)
-                        if raw:
-                            await cache.set(cache_key, raw, CacheTTL.BIRDEYE_OVERVIEW)
-                    if raw:
-                        birdeye_data = birdeye_client.extract_scores_from_overview(raw)
-                        birdeye_data["raw"] = raw
-                        birdeye_used = True
-                        if isinstance(holder_data, dict) and birdeye_data.get("holder_count") and not holder_data.get("total_holders"):
-                            holder_data["total_holders"] = birdeye_data.get("holder_count")
-                        mc = birdeye_data.get('market_cap') or 0
-                        holders = birdeye_data.get('holder_count') or 0
-                        vol = birdeye_data.get('volume_24h') or 0
-                        logger.info(f"✅ Birdeye: MC=${mc:,.0f}, Holders={holders:,}, Vol=${vol:,.0f}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Birdeye failed: {e}")
+
+                # OPT-2: Fetch holders + BirdEye in PARALLEL (both need resolved mint)
+                _mint = contract_address
+
+                async def _fetch_holders_task():
+                    try:
+                        return await solana_scraper.get_top_holders(_mint) or {}
+                    except Exception as _e:
+                        logger.warning(f"⚠️ Holders fetch failed: {_e}")
+                        return {}
+
+                async def _fetch_birdeye_task():
+                    try:
+                        _bk = CacheKeys.birdeye_overview(_mint)
+                        _raw = None
+                        if not force_refresh:
+                            _raw = await cache.get(_bk)
+                        if not _raw:
+                            _raw = await birdeye_client.get_token_overview(_mint)
+                            if _raw:
+                                await cache.set(_bk, _raw, CacheTTL.BIRDEYE_OVERVIEW)
+                        return _raw
+                    except Exception as _e:
+                        logger.warning(f"⚠️ Birdeye fetch failed: {_e}")
+                        return None
+
+                logger.info(f"⚡ Fetching holders + BirdEye in parallel...")
+                _holders_result, _birdeye_raw = await asyncio.gather(
+                    _fetch_holders_task(),
+                    _fetch_birdeye_task(),
+                )
+
+                holder_data = _holders_result
+                if _birdeye_raw:
+                    birdeye_data = birdeye_client.extract_scores_from_overview(_birdeye_raw)
+                    birdeye_data["raw"] = _birdeye_raw
+                    birdeye_used = True
+                    if isinstance(holder_data, dict) and birdeye_data.get("holder_count") and not holder_data.get("total_holders"):
+                        holder_data["total_holders"] = birdeye_data.get("holder_count")
+                    mc = birdeye_data.get('market_cap') or 0
+                    holders = birdeye_data.get('holder_count') or 0
+                    vol = birdeye_data.get('volume_24h') or 0
+                    logger.info(f"✅ Birdeye: MC=${mc:,.0f}, Holders={holders:,}, Vol=${vol:,.0f}")
+                else:
+                    logger.warning(f"⚠️ Birdeye unavailable")
 
                 # Fallback: token age from token_info (it also contains DexScreener pairCreatedAt)
                 if token_age_hours is None and isinstance(token_info, dict):
@@ -993,7 +1058,15 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         }
         
         logger.info(f"✅ Done {ticker} in {duration_ms}ms | score={score} risk={overall['risk']}")
-        
+
+        # OPT-1: Save full analysis to cache for subsequent fast hits
+        try:
+            _cacheable = dict(response)
+            _cacheable["analyzed_at"] = jsonable_encoder(_cacheable["analyzed_at"])
+            await cache.set(_full_cache_key, _cacheable, CacheTTL.FULL_ANALYSIS)
+        except Exception:
+            pass
+
         return AnalyzeResponse(**response)
 
     except HTTPException:
@@ -1112,7 +1185,7 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
                 analyze_req = AnalyzeRequest(
                     ticker=contract,
                     contract_address=contract,
-                    force_refresh=True,
+                    force_refresh=False,
                     llm_model=llm_model,
                 )
                 result = await analyze_coin(analyze_req, db)
@@ -1157,6 +1230,77 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     except Exception as outer_e:
         logger.exception("🔥 CRITICAL: Chat endpoint crashed")
         raise HTTPException(status_code=500, detail=f"Internal chat error: {str(outer_e)}")
+
+
+@router.post("/api/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
+    """Streaming chat via SSE: emits analysis data then streams LLM tokens."""
+    from api.chat import detect_contract, build_analysis_context, build_messages
+
+    async def event_gen():
+        user_msg = request.message.strip()
+        if not user_msg:
+            yield f"data: {json.dumps({'type': 'done', 'full_content': 'Hi! Paste a contract address or ask anything about meme coins.'})}\n\n"
+            return
+
+        llm_model = request.llm_model or "anthropic/claude-sonnet-4-6"
+        contract = detect_contract(user_msg)
+        analysis_data = None
+        analysis_context = None
+
+        # Phase 1: Analysis (with cache — fast if recently checked)
+        if contract:
+            yield f"data: {json.dumps({'type': 'phase', 'label': 'Scanning chain data...'})}\n\n"
+            try:
+                analyze_req = AnalyzeRequest(
+                    ticker=contract,
+                    contract_address=contract,
+                    force_refresh=False,
+                    llm_model=llm_model,
+                )
+                result = await analyze_coin(analyze_req, db)
+                analysis_data = jsonable_encoder(result)
+                analysis_context = build_analysis_context(analysis_data, query_address=contract)
+                yield f"data: {json.dumps({'type': 'analysis', 'data': analysis_data, 'contract': contract})}\n\n"
+            except HTTPException as e:
+                analysis_context = f"Analysis failed for {contract}: {e.detail}"
+            except Exception as e:
+                analysis_context = f"Analysis error: {str(e)}"
+
+        # Phase 2: Stream LLM response
+        messages = build_messages(
+            user_message=user_msg,
+            history=request.history,
+            analysis_context=analysis_context,
+        )
+        yield f"data: {json.dumps({'type': 'phase', 'label': 'Generating response...'})}\n\n"
+
+        full_content = ""
+        try:
+            async for chunk in opengradient_analyzer.chat_completion_stream(
+                messages=messages, llm_model=llm_model
+            ):
+                if chunk["type"] == "chunk":
+                    full_content += chunk["content"]
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk['content']})}\n\n"
+                elif chunk["type"] == "error":
+                    if analysis_context:
+                        full_content = f"⚠️ AI unavailable, but here's the analysis:\n\n{analysis_context}"
+                    else:
+                        full_content = f"⚠️ AI service temporarily unavailable: {chunk['error']}"
+                    yield f"data: {json.dumps({'type': 'fallback', 'content': full_content})}\n\n"
+                    break
+        except Exception as e:
+            full_content = f"⚠️ Stream error: {str(e)}"
+            yield f"data: {json.dumps({'type': 'fallback', 'content': full_content})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'full_content': full_content})}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

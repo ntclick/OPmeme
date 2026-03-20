@@ -15,4 +15,4 @@ ping -c 1 llm.opengradient.ai || echo "⚠️ Ping failed (expected if ICMP bloc
 # --- Start Application ---
 # We use the PORT environment variable provided by Railway (defaulting to 8080)
 echo "🚀 Starting CoinCheckGo on port ${PORT:-8080}..."
-exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --loop uvloop

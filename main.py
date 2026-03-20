@@ -1,4 +1,10 @@
 # main.py (Clean Version)
+import sys
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr.encoding and sys.stderr.encoding.lower() != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,6 +98,14 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 async def startup():
     """Create DB tables on first run."""
     init_db()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Close shared HTTP client on shutdown."""
+    from api.routes import _shared_http_client
+    if _shared_http_client and not _shared_http_client.is_closed:
+        await _shared_http_client.aclose()
 
 
 @app.get("/", include_in_schema=False)

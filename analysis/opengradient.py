@@ -194,6 +194,32 @@ class OpenGradientAnalyzer:
         except Exception as e:
             return {"content": None, "error": str(e)}
 
+    async def chat_completion_stream(self, messages: Any, llm_model: Optional[str] = None, max_tokens: int = 1000) -> AsyncGenerator[dict, None]:
+        """Streaming version of chat_completion — yields chunks as they arrive."""
+        if not self._initialized:
+            yield {"type": "error", "error": self._init_error}
+            return
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        model_str = llm_model if llm_model and "/" in llm_model else self.DEFAULT_MODEL
+        try:
+            current_model = self.model_map.get(model_str, og.TEE_LLM.GPT_4_1_2025_04_14)
+            stream = await self._llm_instance.chat(
+                model=current_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.4,
+                stream=True,
+                x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
+            )
+            async for chunk in stream:
+                content = getattr(chunk.choices[0].delta, "content", "")
+                if content:
+                    yield {"type": "chunk", "content": content}
+            yield {"type": "done"}
+        except Exception as e:
+            yield {"type": "error", "error": str(e)}
+
     async def analyze_coin(self, ticker: str, tweets_summary: list, on_chain_data: dict, scoring_result: dict, llm_model: Optional[str] = None) -> dict:
         if not self._initialized: return {"error": self._init_error}
         model_str = llm_model or self.DEFAULT_MODEL

@@ -8,6 +8,7 @@
     <meta name="description" content="Chat-based meme coin analyzer powered by OpenGradient AI. Paste any contract address for instant analysis.">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -96,6 +97,37 @@
             0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
             40% { opacity: 1; transform: scale(1.2); }
         }
+        /* Streaming cursor */
+        .typing-cursor {
+            display: inline-block;
+            color: #a78bfa;
+            animation: cursorBlink 0.7s step-end infinite;
+            font-weight: bold;
+            margin-left: 1px;
+        }
+        @keyframes cursorBlink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* Markdown rendered in AI messages */
+        .ai-content h1,.ai-content h2,.ai-content h3 { font-weight: 700; margin: 0.6em 0 0.3em; color: #e2e8f0; }
+        .ai-content h1 { font-size: 1.1em; }
+        .ai-content h2 { font-size: 1em; }
+        .ai-content h3 { font-size: 0.95em; color: #a78bfa; }
+        .ai-content p { margin: 0 0 0.5em; }
+        .ai-content p:last-child { margin: 0; }
+        .ai-content ul,.ai-content ol { margin: 0.3em 0 0.5em 1.2em; }
+        .ai-content li { margin-bottom: 0.2em; }
+        .ai-content strong { color: #f8fafc; font-weight: 700; }
+        .ai-content em { color: #cbd5e1; }
+        .ai-content code { background: rgba(167,139,250,0.15); color: #a78bfa; padding: 1px 5px; border-radius: 4px; font-family: monospace; font-size: 0.85em; }
+        .ai-content hr { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 0.6em 0; }
+        .ai-content table { width: 100%; border-collapse: collapse; font-size: 0.8em; margin: 0.5em 0; }
+        .ai-content th { background: rgba(167,139,250,0.15); color: #a78bfa; padding: 4px 8px; text-align: left; border: 1px solid rgba(255,255,255,0.1); }
+        .ai-content td { padding: 3px 8px; border: 1px solid rgba(255,255,255,0.06); color: #d1d5db; }
+        .ai-content tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+        .stream-content.ai-content p:last-child { display: inline; }
 
         /* Analysis card in chat */
         .analysis-card {
@@ -258,17 +290,22 @@
             return { color: '#ef4444', bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400', label: 'EXTREME' };
         }
 
+        // Configure marked.js once
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({ breaks: true, gfm: true });
+        }
         function formatAIText(text) {
+            if (!text) return '';
+            if (typeof marked !== 'undefined') {
+                return marked.parse(text);
+            }
+            // Fallback if marked not loaded
             let html = escapeHtml(text);
             html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
             html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
             html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-            html = html.replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>');
-            html = html.replace(/(<li>.*<\/li>\n?)+/gs, '<ul>$&</ul>');
-            html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-            html = html.replace(/\n\n/g, '</p><p>');
             html = html.replace(/\n/g, '<br>');
-            return '<p>' + html + '</p>';
+            return html;
         }
 
         function scrollToBottom() {
@@ -309,7 +346,7 @@
         }
 
         let typingCounter = 0;
-        function showTyping() {
+        function showTyping(label) {
             const id = 'typing-' + (++typingCounter);
             const div = document.createElement('div');
             div.id = id;
@@ -326,7 +363,7 @@
                         <div class="typing-dot"></div>
                         <div class="typing-dot"></div>
                         <div class="typing-dot"></div>
-                        <span class="text-xs text-gray-600 ml-2">Analyzing...</span>
+                        <span class="typing-label text-xs text-gray-500 ml-2">${label || 'Thinking...'}</span>
                     </div>
                 </div>
             `;
@@ -334,6 +371,14 @@
             lucide.createIcons();
             scrollToBottom();
             return id;
+        }
+
+        function updateTypingLabel(id, label) {
+            const el = document.getElementById(id);
+            if (el) {
+                const span = el.querySelector('.typing-label');
+                if (span) span.textContent = label;
+            }
         }
 
         function removeTyping(id) {
@@ -457,12 +502,16 @@
             chatInput.style.height = 'auto';
 
             appendUserMessage(msg);
-            const typingId = showTyping();
+            const model = llmSelect?.value || 'anthropic/claude-sonnet-4-6';
+            const typingId = showTyping('Thinking...');
+
+            let aiDiv = null;
+            let aiContentEl = null;
+            let fullContent = '';
+            let analysisShown = false;
 
             try {
-                const model = llmSelect?.value || 'anthropic/claude-sonnet-4-6';
-
-                const resp = await fetch('/api/chat', {
+                const resp = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -472,28 +521,86 @@
                     })
                 });
 
-                removeTyping(typingId);
                 if (!resp.ok) {
-                    let errorDetail = 'Request failed';
-                    try {
-                        const errData = await resp.json();
-                        errorDetail = errData.detail || errData.error || `Error ${resp.status}`;
-                    } catch (e) {
-                        errorDetail = `Server Error (${resp.status})`;
-                    }
-                    throw new Error(errorDetail);
+                    removeTyping(typingId);
+                    const errData = await resp.json().catch(() => ({}));
+                    throw new Error(errData.detail || `Error ${resp.status}`);
                 }
 
-                const data = await resp.json();
-                chatHistory.push({ role: 'user', content: msg });
-                chatHistory.push({ role: 'assistant', content: data.content });
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                if (data.analysis_data) appendAnalysisCard(data.analysis_data);
-                appendAIMessage(data.content);
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        let event;
+                        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+                        if (event.type === 'phase') {
+                            updateTypingLabel(typingId, event.label);
+
+                        } else if (event.type === 'analysis') {
+                            if (!analysisShown && event.data) {
+                                appendAnalysisCard(event.data);
+                                analysisShown = true;
+                            }
+
+                        } else if (event.type === 'chunk') {
+                            if (!aiDiv) {
+                                removeTyping(typingId);
+                                aiDiv = document.createElement('div');
+                                aiDiv.className = 'flex justify-start';
+                                aiDiv.innerHTML = `
+                                    <div class="msg-ai px-4 py-3 max-w-[85%]">
+                                        <div class="flex items-center gap-2 mb-2">
+                                            <div class="w-6 h-6 rounded-full bg-gradient-to-br from-secondary to-purple-600 flex items-center justify-center">
+                                                <i data-lucide="bot" class="w-3.5 h-3.5 text-white"></i>
+                                            </div>
+                                            <span class="text-xs font-bold text-secondary/80">CoinCheckGo AI</span>
+                                        </div>
+                                        <div class="ai-content text-sm text-gray-300 leading-relaxed stream-content"></div>
+                                    </div>`;
+                                messagesDiv.appendChild(aiDiv);
+                                lucide.createIcons();
+                                aiContentEl = aiDiv.querySelector('.stream-content');
+                            }
+                            fullContent += event.content;
+                            aiContentEl.innerHTML = formatAIText(fullContent) + '<span class="typing-cursor">▌</span>';
+                            scrollToBottom();
+
+                        } else if (event.type === 'fallback') {
+                            removeTyping(typingId);
+                            fullContent = event.content;
+                            appendAIMessage(fullContent);
+                            aiDiv = true; // mark as handled
+
+                        } else if (event.type === 'done') {
+                            removeTyping(typingId);
+                            if (aiContentEl) {
+                                aiContentEl.innerHTML = formatAIText(fullContent);
+                            }
+                            if (event.full_content) fullContent = event.full_content;
+                            chatHistory.push({ role: 'user', content: msg });
+                            chatHistory.push({ role: 'assistant', content: fullContent });
+                        }
+                    }
+                }
 
             } catch (err) {
                 removeTyping(typingId);
-                appendAIMessage(`⚠️ Error: ${err.message}`);
+                if (aiContentEl) {
+                    aiContentEl.innerHTML = formatAIText(fullContent);
+                } else if (!analysisShown) {
+                    appendAIMessage(`⚠️ Error: ${err.message}`);
+                }
                 console.error('Send Error:', err);
             }
 
