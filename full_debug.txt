@@ -1,0 +1,32 @@
+--- Detailed Debugging ---
+✅ Init OK
+🔍 Checking approval (0.1 OPG)...
+   Allowance Before: 419.0377 OPG
+   Allowance After:  419.0377 OPG
+   TX: None
+🚀 Attempting chat...
+❌ Error: TEE LLM chat failed: Client error '402 Payment Required' for url 'https://13.59.207.188/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/402
+Traceback (most recent call last):
+  File "F:\Work\Cryoto\OP\coincheckgo\.venv\Lib\site-packages\opengradient\client\llm.py", line 336, in _chat_request
+    response.raise_for_status()
+  File "F:\Work\Cryoto\OP\coincheckgo\.venv\Lib\site-packages\httpx\_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '402 Payment Required' for url 'https://13.59.207.188/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/402
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "F:\Work\Cryoto\OP\coincheckgo\scripts\test_robustness.py", line 29, in main
+    res = await llm.chat(
+          ^^^^^^^^^^^^^^^
+  File "F:\Work\Cryoto\OP\coincheckgo\.venv\Lib\site-packages\opengradient\client\llm.py", line 313, in chat
+    return await self._chat_request(params, messages)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Work\Cryoto\OP\coincheckgo\.venv\Lib\site-packages\opengradient\client\llm.py", line 362, in _chat_request
+    raise RuntimeError(f"TEE LLM chat failed: {e}") from e
+RuntimeError: TEE LLM chat failed: Client error '402 Payment Required' for url 'https://13.59.207.188/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/402
+
+Gateway suggests: Check balance at faucet.opengradient.ai

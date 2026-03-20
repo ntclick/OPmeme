@@ -1,5 +1,4 @@
-# main.py — FastAPI app entry point
-
+# main.py (Clean Version)
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

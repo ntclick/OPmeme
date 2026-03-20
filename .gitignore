@@ -23,3 +23,12 @@ opengradient_sdk/
 inspect_og.py
 reproduce_crash.py
 OpenGradient-SDK/
+
+# Diagnostic and scratch files
+diag_ip.py
+diagnose_payment.py
+check_balance_pure.py
+verify_wallet.py
+test_v2.py
+verify_og_fix.py
+final_battle.py
