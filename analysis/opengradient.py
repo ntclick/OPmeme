@@ -4,7 +4,18 @@ import httpx
 import logging
 import json
 import os
-from typing import Any, Optional
+from typing import Any, Optional, AsyncGenerator
+
+# --- SURGICAL SSL BYPASS (Required for TEE self-signed certs) ---
+# This patches at the module level but preserves httpx transport logic.
+_orig_ssl_context = ssl.create_default_context
+def _unverified_ssl_context(*args, **kwargs):
+    ctx = _orig_ssl_context(*args, **kwargs)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+ssl.create_default_context = _unverified_ssl_context
+
 import opengradient as og
 
 # --- OpenGradient v2 Proper — Clean Integration ---

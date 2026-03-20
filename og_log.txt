@@ -1,2 +1,0 @@
-﻿--- Diagnostic for OpenGradient 0.8.0 ---
-Connecting to: https://13.59.207.188
