@@ -180,7 +180,7 @@ class OpenGradientAnalyzer:
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0.4,
-                x402_settlement_mode=og.x402SettlementMode.BATCH_HASHED
+                x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
             )
             chat_output = result.chat_output
             if isinstance(chat_output, dict) and "content" in chat_output:
