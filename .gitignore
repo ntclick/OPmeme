@@ -38,7 +38,9 @@ full_debug.txt
 header_debug.txt
 og_log.txt
 test_error.txt
+# Diagnostic and scratch files
 *.txt
+!requirements.txt
 *.sqlite
 check_balance.py
 discovery.py
