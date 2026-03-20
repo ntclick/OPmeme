@@ -15,16 +15,16 @@ RUN useradd -m -u 1000 user
 # Copy the rest of the application with ownership
 COPY --chown=user:user . .
 
+# Copy DNS resolution entrypoint
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
-# Create directory for sqlite database with write permissions
+# User permission setup (Note: root is required to modify /etc/hosts at runtime)
+RUN chown -R user:user /app
 RUN mkdir -p /app/data && chown user:user /app/data
 
-USER user
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
-
-# Expose single port for Railway
+# Railway standard configuration
 EXPOSE 8080
 
-# Command to run the application
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+# Use entrypoint to apply runtime fixes
+CMD ["./entrypoint.sh"]
