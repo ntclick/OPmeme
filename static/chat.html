@@ -149,16 +149,23 @@
             <div class="flex items-center gap-2 md:gap-3 text-sm overflow-x-auto no-scrollbar">
                 <select id="llmModelSelect"
                     class="bg-black/60 border border-white/10 rounded-lg px-2 py-1.5 text-[10px] md:text-xs text-white font-mono focus:outline-none focus:border-primary/60 flex-shrink-0">
-                    <option value="openai/gpt-4o">GPT-4o</option>
+                    <option value="openai/gpt-5">GPT-5</option>
+                    <option value="openai/gpt-5-2">GPT-5.2</option>
+                    <option value="openai/gpt-5-mini">GPT-5 Mini</option>
                     <option value="openai/gpt-4.1-2025-04-14">GPT-4.1</option>
                     <option value="openai/o4-mini">o4-mini</option>
-                    <option value="anthropic/claude-4.0-sonnet" selected>Claude 4.0 Sonnet</option>
-                    <option value="anthropic/claude-3.7-sonnet">Claude 3.7 Sonnet</option>
-                    <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku</option>
-                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="anthropic/claude-opus-4-6">Claude Opus 4.6</option>
+                    <option value="anthropic/claude-sonnet-4-6" selected>Claude Sonnet 4.6</option>
+                    <option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5</option>
+                    <option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5</option>
+                    <option value="google/gemini-3-pro">Gemini 3 Pro</option>
+                    <option value="google/gemini-3-flash">Gemini 3 Flash</option>
                     <option value="google/gemini-2.5-pro">Gemini 2.5 Pro</option>
-                    <option value="google/gemini-2.0-flash">Gemini 2.0 Flash</option>
-                    <option value="x-ai/grok-3-beta">Grok 3 Beta</option>
+                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="google/gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+                    <option value="x-ai/grok-4">Grok 4</option>
+                    <option value="x-ai/grok-4-fast">Grok 4 Fast</option>
+                    <option value="x-ai/grok-4.1-fast">Grok 4.1 Fast</option>
                 </select>
                 <div class="flex items-center gap-1 bg-white/5 px-2 py-1 rounded-full border border-white/10">
                     <i data-lucide="cpu" class="w-3.5 h-3.5 text-secondary"></i>
@@ -453,7 +460,7 @@
             const typingId = showTyping();
 
             try {
-                const model = llmSelect?.value || 'anthropic/claude-4.0-sonnet';
+                const model = llmSelect?.value || 'anthropic/claude-sonnet-4-6';
 
                 const resp = await fetch('/api/chat', {
                     method: 'POST',

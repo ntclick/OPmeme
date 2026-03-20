@@ -40,13 +40,20 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
 You are 'CoinCheckGo Sentinel' — a ruthless, data-driven meme coin auditor on Solana.
-Your output is immutable proof verified by TEE. Output ONLY valid JSON.
+Your output is immutable proof verified by TEE. Output ONLY valid JSON in this format:
+{
+  "verdict": "Your detailed analysis text here (Markdown allowed)",
+  "ai_trust_score": 0-100,
+  "red_flags": ["flag 1", "flag 2"],
+  "green_flags": ["signal 1", "signal 2"],
+  "risk_level": "LOW/MEDIUM/HIGH/EXTREME"
+}
 """
 
 class OpenGradientAnalyzer:
     """ OpenGradient Analyzer (v2 Proper - Ultimate Resilience Edition) """
 
-    DEFAULT_MODEL = "openai/gpt-4.1-2025-04-14"
+    DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
     def __init__(self):
         self._initialized = False
@@ -88,14 +95,34 @@ class OpenGradientAnalyzer:
                 # Return early without setting _initialized = True
                 return
 
-            # Model mapping (Updated to match SDK TEE_LLM enum exactly)
+            # Model mapping (Updated to match latest SDK and user request)
             self.model_map = {
-                "google/gemini-2.5-flash": og.TEE_LLM.GEMINI_2_5_FLASH,
-                "google/gemini-2.5-pro": og.TEE_LLM.GEMINI_2_5_PRO,
-                "anthropic/claude-4.0-sonnet": og.TEE_LLM.CLAUDE_SONNET_4_5,
-                "anthropic/claude-3.7-sonnet": og.TEE_LLM.CLAUDE_SONNET_4_6,
-                "openai/gpt-4o": og.TEE_LLM.GPT_5, # SDK docs imply GPT_5 is the flagship
+                # OpenAI
+                "openai/gpt-5": og.TEE_LLM.GPT_5,
+                "openai/gpt-5-2": og.TEE_LLM.GPT_5_2,
+                "openai/gpt-5-mini": og.TEE_LLM.GPT_5_MINI,
                 "openai/gpt-4.1-2025-04-14": og.TEE_LLM.GPT_4_1_2025_04_14,
+                "openai/o4-mini": og.TEE_LLM.O4_MINI,
+                
+                # Anthropic
+                "anthropic/claude-opus-4-6": og.TEE_LLM.CLAUDE_OPUS_4_6,
+                "anthropic/claude-opus-4-5": og.TEE_LLM.CLAUDE_OPUS_4_5,
+                "anthropic/claude-sonnet-4-6": og.TEE_LLM.CLAUDE_SONNET_4_6,
+                "anthropic/claude-sonnet-4-5": og.TEE_LLM.CLAUDE_SONNET_4_5,
+                "anthropic/claude-haiku-4-5": og.TEE_LLM.CLAUDE_HAIKU_4_5,
+                
+                # Google
+                "google/gemini-3-pro": og.TEE_LLM.GEMINI_3_PRO,
+                "google/gemini-3-flash": og.TEE_LLM.GEMINI_3_FLASH,
+                "google/gemini-2.5-pro": og.TEE_LLM.GEMINI_2_5_PRO,
+                "google/gemini-2.5-flash": og.TEE_LLM.GEMINI_2_5_FLASH,
+                "google/gemini-2.5-flash-lite": og.TEE_LLM.GEMINI_2_5_FLASH_LITE,
+
+                # xAI
+                "x-ai/grok-4": og.TEE_LLM.GROK_4,
+                "x-ai/grok-4-fast": og.TEE_LLM.GROK_4_FAST,
+                "x-ai/grok-4.1-fast": og.TEE_LLM.GROK_4_1_FAST,
+                "x-ai/grok-4-1-fast-non-reasoning": og.TEE_LLM.GROK_4_1_FAST_NON_REASONING,
             }
 
             self._initialized = True
@@ -117,7 +144,15 @@ class OpenGradientAnalyzer:
                 temperature=0.4,
                 x402_settlement_mode=og.x402SettlementMode.BATCH_HASHED
             )
-            return {"content": str(result.chat_output), "error": None}
+            chat_output = result.chat_output
+            if isinstance(chat_output, dict) and "content" in chat_output:
+                content = chat_output["content"]
+            elif hasattr(chat_output, "content"):
+                content = chat_output.content
+            else:
+                content = str(chat_output)
+            
+            return {"content": content, "error": None}
         except Exception as e:
             return {"content": None, "error": str(e)}
 
@@ -135,13 +170,37 @@ class OpenGradientAnalyzer:
                 temperature=0.1,
                 x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
             )
-            raw = str(completion.chat_output)
+            raw_output = completion.chat_output
+            if isinstance(raw_output, dict) and "content" in raw_output:
+                raw = raw_output["content"]
+            elif hasattr(raw_output, "content"):
+                raw = raw_output.content
+            else:
+                raw = str(raw_output)
+
             try:
+                # Attempt to extract JSON if LLM wraps it in text
                 start = raw.find("{")
                 end = raw.rfind("}") + 1
                 ai_result = json.loads(raw[start:end])
-            except: ai_result = {"verdict": raw}
-            return {"ai_result": ai_result, "tx_hash": getattr(completion, "transaction_hash", None), "used_opengradient": True}
+                # If LLM returned the OAI message object inside the stringified content
+                if "content" in ai_result and "role" in ai_result:
+                    inner_raw = ai_result["content"]
+                    try:
+                        inner_start = inner_raw.find("{")
+                        inner_end = inner_raw.rfind("}") + 1
+                        ai_result = json.loads(inner_raw[inner_start:inner_end])
+                    except:
+                        ai_result = {"verdict": inner_raw}
+            except: 
+                ai_result = {"verdict": raw}
+            
+            return {
+                "ai_result": ai_result, 
+                "tx_hash": getattr(completion, "transaction_hash", None), 
+                "used_opengradient": True,
+                "model_used": current_model
+            }
         except Exception as e:
             logger.error(f"Inference failed: {e}")
             return {"error": str(e), "used_opengradient": False}

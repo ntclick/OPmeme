@@ -1095,7 +1095,7 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
         if not user_msg:
             return ChatResponse(content="Hi! Paste a contract address or ask anything about meme coins 🚀")
 
-        llm_model = request.llm_model or "anthropic/claude-4.0-sonnet"
+        llm_model = request.llm_model or "anthropic/claude-sonnet-4-6"
         contract = detect_contract(user_msg)
         analysis_data = None
         analysis_context = None
