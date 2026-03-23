@@ -205,7 +205,7 @@ class SolanaScraper:
 
 
     async def get_top_holders(
-        self, mint_address: str, top_n: int = 20
+        self, mint_address: str, top_n: int = 20, prefetched_token_info: Optional[dict] = None
     ) -> Optional[dict]:
         """
         Get top holders of a token.
@@ -214,6 +214,9 @@ class SolanaScraper:
         1. Call getTokenLargestAccounts (Solana RPC native)
         2. Calculate each holder's % of total supply
         3. Compute concentration metrics
+
+        Args:
+            prefetched_token_info: If provided, skip redundant get_token_info() call.
 
         Returns:
         {
@@ -224,8 +227,8 @@ class SolanaScraper:
             "holders": [ {"address": "...", "amount": N, "percentage": P}, ... ]
         }
         """
-        # Resolve actual mint address first
-        token_info = await self.get_token_info(mint_address)
+        # Use prefetched data to avoid duplicate RPC call
+        token_info = prefetched_token_info or await self.get_token_info(mint_address)
         if token_info and isinstance(token_info, dict):
             actual_mint = token_info.get("mint", self._normalize_address(mint_address))
             try:

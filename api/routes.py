@@ -56,6 +56,7 @@ router = APIRouter()
 _ANALYZE_STREAM_META_CB: ContextVar[Optional[Callable[[dict], Awaitable[None]]]] = ContextVar(
     "_ANALYZE_STREAM_META_CB", default=None
 )
+_SKIP_OG_AI: ContextVar[bool] = ContextVar("_SKIP_OG_AI", default=False)
 
 # Services
 solana_scraper = SolanaScraper()
@@ -517,9 +518,12 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 # OPT-2: Fetch holders + BirdEye in PARALLEL (both need resolved mint)
                 _mint = contract_address
 
+                # OPT-6: Pass prefetched token_info to avoid duplicate RPC call
+                _prefetched_ti = token_info
+
                 async def _fetch_holders_task():
                     try:
-                        return await solana_scraper.get_top_holders(_mint) or {}
+                        return await solana_scraper.get_top_holders(_mint, prefetched_token_info=_prefetched_ti) or {}
                     except Exception as _e:
                         logger.warning(f"⚠️ Holders fetch failed: {_e}")
                         return {}
@@ -812,9 +816,18 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # We don't have tweets since Social is disabled
         empty_tweets = []
         
-        logger.info(f"🧠 Running OpenGradient AI Inference...")
+        # OPT-5: Skip AI when called from chat (chat runs its own LLM call)
+        skip_ai = _SKIP_OG_AI.get()
+        if skip_ai:
+            logger.info(f"⚡ Skipping OpenGradient AI (chat mode)")
+            ai_result = {"ai_result": None, "used_opengradient": False}
+        else:
+            logger.info(f"🧠 Running OpenGradient AI Inference...")
+
         stream_meta_cb = _ANALYZE_STREAM_META_CB.get()
-        if stream_meta_cb:
+        if skip_ai:
+            pass
+        elif stream_meta_cb:
             ai_result = None
             async for evt in opengradient_analyzer.analyze_coin_stream(
                 ticker=ticker,
@@ -1180,7 +1193,8 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
 
         if contract:
             logger.info(f"💬 Chat: detected contract {contract[:12]}... in message")
-            # Run analysis through existing endpoint logic
+            # OPT-5: Skip OpenGradient AI in analyze_coin — chat runs its own LLM
+            _skip_token = _SKIP_OG_AI.set(True)
             try:
                 analyze_req = AnalyzeRequest(
                     ticker=contract,
@@ -1189,7 +1203,6 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
                     llm_model=llm_model,
                 )
                 result = await analyze_coin(analyze_req, db)
-                # Convert AnalyzeResponse to dict
                 analysis_data = jsonable_encoder(result)
                 analysis_context = build_analysis_context(analysis_data, query_address=contract)
                 logger.info(f"✅ Chat: analysis complete for {contract[:12]}...")
@@ -1199,6 +1212,8 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
             except Exception as e:
                 logger.warning(f"⚠️ Chat: analysis error: {e}")
                 analysis_context = f"Analysis error for contract {contract}: {str(e)}"
+            finally:
+                _SKIP_OG_AI.reset(_skip_token)
 
         # Build messages for LLM
         messages = build_messages(
@@ -1249,8 +1264,10 @@ async def chat_stream_endpoint(request: ChatRequest, db: Session = Depends(get_d
         analysis_context = None
 
         # Phase 1: Analysis (with cache — fast if recently checked)
+        # OPT-5: Skip OpenGradient AI — chat streams its own LLM
         if contract:
             yield f"data: {json.dumps({'type': 'phase', 'label': 'Scanning chain data...'})}\n\n"
+            _skip_token = _SKIP_OG_AI.set(True)
             try:
                 analyze_req = AnalyzeRequest(
                     ticker=contract,
@@ -1266,6 +1283,8 @@ async def chat_stream_endpoint(request: ChatRequest, db: Session = Depends(get_d
                 analysis_context = f"Analysis failed for {contract}: {e.detail}"
             except Exception as e:
                 analysis_context = f"Analysis error: {str(e)}"
+            finally:
+                _SKIP_OG_AI.reset(_skip_token)
 
         # Phase 2: Stream LLM response
         messages = build_messages(

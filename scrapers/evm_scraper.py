@@ -87,7 +87,7 @@ class EVMScraper:
             return None
         
         base_url = {
-            "eth": self.ETHERSSCAN_BASE,
+            "eth": self.ETHERSCAN_BASE,
             "base": self.BASESCAN_BASE,
             "bsc": self.BSCSCAN_BASE
         }.get(chain, self.BASESCAN_BASE)
