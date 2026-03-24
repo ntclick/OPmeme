@@ -1,10 +1,12 @@
 # database/crud.py — CRUD operations for coins, tweets, reports
 
 from sqlalchemy.orm import Session
-from database.models import Coin, TweetRaw, AnalysisReport, HolderSnapshot
+from database.models import Coin, TweetRaw, AnalysisReport, HolderSnapshot, WatchedCoin, EventLog
 from datetime import datetime
 from typing import Optional
+import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -138,3 +140,98 @@ def save_holder_snapshot(
     db.commit()
     db.refresh(snapshot)
     return snapshot
+
+
+# ── WatchedCoin & EventLog CRUD ───────────────────────────────────
+
+def get_all_watched(db: Session) -> list[dict]:
+    """Return all watched coins with their events, formatted for API response."""
+    coins = db.query(WatchedCoin).all()
+    result = []
+    for c in coins:
+        events = db.query(EventLog).filter(EventLog.mint == c.mint).order_by(EventLog.created_at.asc()).all()
+        sm = json.loads(c.smart_money) if c.smart_money else []
+        result.append({
+            "mint": c.mint,
+            "symbol": c.symbol,
+            "name": c.name,
+            "dex": c.dex,
+            "status": c.status,
+            "score": c.score,
+            "mcap": c.mcap,
+            "liq": c.liq,
+            "holders": c.holders,
+            "smart_money": sm,
+            "pump_created_at": c.pump_created_at,
+            "lp_added_at": c.lp_added_at,
+            "last_checked": c.last_checked,
+            "degraded_at": c.degraded_at,
+            "filter": {
+                "t0": c.filter_t0,
+                "t1": c.filter_t1,
+                "t2": c.filter_t2,
+                "t3": c.filter_t3,
+                "t4": c.filter_t4,
+            },
+            "birdeye_checked": c.birdeye_checked,
+            "events": [
+                {"type": e.event_type, "msg": e.message, "ts": e.created_at, "score": e.score}
+                for e in events
+            ],
+        })
+    return result
+
+
+def get_events(db: Session, limit: int = 500) -> list[dict]:
+    """Return recent events across all coins."""
+    events = db.query(EventLog).order_by(EventLog.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "type": e.event_type,
+            "msg": e.message,
+            "ts": e.created_at,
+            "score": e.score,
+            "mint": e.mint,
+            "symbol": e.symbol,
+        }
+        for e in events
+    ]
+
+
+def get_dashboard_stats(db: Session) -> dict:
+    """Return aggregate stats for the dashboard."""
+    coins = db.query(WatchedCoin).all()
+    total = len(coins)
+    active = sum(1 for c in coins if c.status == "active")
+    removed = sum(1 for c in coins if c.status == "removed")
+    sm = sum(1 for c in coins if c.smart_money and json.loads(c.smart_money))
+    pass_t3 = sum(1 for c in coins if c.filter_t0 and c.filter_t1 and c.filter_t2 and c.filter_t3)
+    birdeye_called = sum(1 for c in coins if c.birdeye_checked)
+    now = int(time.time())
+    ages = [now - (c.lp_added_at or now) for c in coins]
+    avg_age = sum(ages) / len(ages) if ages else 0
+    return {
+        "total": total,
+        "active": active,
+        "removed": removed,
+        "smart_money": sm,
+        "pass_t3": pass_t3,
+        "birdeye_called": birdeye_called,
+        "birdeye_saved": total - birdeye_called,
+        "avg_age_seconds": avg_age,
+    }
+
+
+def log_event(db: Session, mint: str, symbol: str, event_type: str, message: str, score: int = None):
+    """Insert an event into event_log."""
+    evt = EventLog(
+        mint=mint,
+        symbol=symbol,
+        event_type=event_type,
+        message=message,
+        score=score,
+        created_at=int(time.time()),
+    )
+    db.add(evt)
+    db.commit()
+    return evt

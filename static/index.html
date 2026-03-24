@@ -218,8 +218,10 @@
                     <i data-lucide="message-square" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
                     <span>Chat AI</span>
                 </a>
-                <button onclick="toggleLanguage()" id="langToggleBtn"
-                    class="px-2 py-1 rounded border border-white/10 hover:border-primary/50 transition flex-shrink-0">VI</button>
+                <a href="/monitor" class="flex items-center gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-lg bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20 transition-all font-bold whitespace-nowrap">
+                    <i data-lucide="radar" class="w-3.5 h-3.5 md:w-4 md:h-4"></i>
+                    <span>PumpScan</span>
+                </a>
                 <a href="#" id="navFeatures" class="hover:text-white transition whitespace-nowrap">Features</a>
                 <a href="#" id="navTrending" class="hover:text-white transition whitespace-nowrap">Trending</a>
                 <div class="flex items-center gap-1 bg-white/5 px-2.5 md:px-3 py-1.5 rounded-full border border-white/10 flex-shrink-0">
@@ -698,76 +700,9 @@
                 chartUnavailable: 'Chart unavailable',
                 trendingLoading: 'Loading...',
             },
-            vi: {
-                title: 'CoinCheckGo - Kiểm định Meme Coin',
-                features: 'Tính năng',
-                trending: 'Xu hướng',
-                heroTitle1: 'Đừng Mua ',
-                heroTitleTrash: 'Rác',
-                heroTitle2: 'Mua ',
-                heroTitleAlpha: 'Alpha',
-                heroTitleAvoid: '. Tránh ',
-                heroTitleRugs: 'Rug Pull',
-                heroTitleScams: ' & Scam.',
-                heroDesc: 'Phân tích Kỹ thuật & On-Chain với OpenGradient AI. Kiểm định thời gian thực cho token Solana.',
-                searchPlaceholder: 'Nhập mã token hoặc địa chỉ contract...',
-                btnAudit: 'Kiểm định Token',
-                trendingLabel: 'Xu hướng:',
-                loadingTitle: 'Đang Phân tích Token...',
-                step1: 'Thu thập dữ liệu Kỹ thuật & On-chain',
-                step2: 'Tính toán chỉ số Đà tăng & Khối lượng',
-                step3: 'Phân tích Bảo mật & Rủi ro cá voi',
-                step4: 'OpenGradient AI xác minh on-chain',
-                step5: 'Hoàn thiện Báo cáo Kiểm định AI',
-                analyzing: 'Đang phân tích',
-                trustScore: 'Điểm Tin cậy',
-                cached: 'Đã cache',
-                aiBadgeTitle: 'Kiểm định AI có thể xác minh',
-                aiBadgeLink: 'Xem trên OpenGradient',
-                aiBadgePending: 'Xác minh AI đang chờ',
-                modelLabel: 'Mô hình',
-                scoreBreakdown: 'Chi tiết Điểm số',
-                techTitle: 'Kỹ thuật',
-                momentum: 'Đà tăng',
-                volume: 'Khối lượng (24h)',
-                tradePressure: 'Áp lực Giao dịch',
-                liquidityDepth: 'Độ sâu Thanh khoản',
-                onchainTitle: 'On-Chain',
-                holdersBase: 'Cơ sở Holder',
-                contractSecurity: 'Bảo mật Contract',
-                whaleRisk: 'Rủi ro Cá voi',
-                aiVerifiedTitle: 'Đã xác minh AI',
-                aiVerifiedDesc: 'Điểm số được xử lý an toàn on-chain qua mạng tính toán có thể xác minh của OpenGradient.',
-                computationVerified: 'Tính toán đã xác minh',
-                redFlagsTitle: 'Yếu tố Rủi ro (Cờ Đỏ)',
-                greenFlagsTitle: 'Tín hiệu Tích cực (Cờ Xanh)',
-                noRedFlags: 'Không phát hiện yếu tố rủi ro lớn',
-                noGreenFlags: 'Không có tín hiệu tích cực đáng kể',
-                verifiableInference: 'Suy luận có thể xác minh bởi OpenGradient',
-                scoringAlgo: 'Thuật toán Chấm điểm v3.1 (Kỹ thuật 65% / On-Chain 35%)',
-                contract: 'Contract: ',
-                unknown: 'Không rõ',
-                moon: 'MOON',
-                lowRisk: 'Rủi ro Thấp',
-                mediumRisk: 'Rủi ro Trung bình',
-                highRisk: 'Rủi ro Cao',
-                extremeRug: 'Rủi ro Rug Cực cao',
-                analysisFailed: 'Phân tích thất bại',
-                errorPrefix: 'Lỗi: ',
-                llmModelLabel: 'Mô hình:',
-                riskWarning: 'Cảnh báo: Không phải lời khuyên tài chính. Meme coin biến động rất mạnh; bạn có thể mất 100% vốn.',
-                authorLabel: 'Tác giả:',
-                chartUnavailable: 'Không tải được chart',
-                trendingLoading: 'Đang tải...',
-            }
         };
 
         let currentLang = 'en';
-
-        function toggleLanguage() {
-            currentLang = currentLang === 'en' ? 'vi' : 'en';
-            applyLanguage();
-        }
 
         function applyLanguage() {
             const t = translations[currentLang];
@@ -827,8 +762,6 @@
             document.getElementById('verifiableInferenceText').innerText = t.verifiableInference;
             document.getElementById('scoringAlgoText').innerText = t.scoringAlgo;
 
-            const langBtn = document.getElementById('langToggleBtn');
-            if (langBtn) langBtn.innerText = currentLang === 'vi' ? 'EN' : 'VI';
 
             const llmModelLabel = document.getElementById('llmModelLabelText');
             if (llmModelLabel) llmModelLabel.innerText = t.llmModelLabel;

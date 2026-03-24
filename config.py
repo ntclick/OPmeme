@@ -84,6 +84,13 @@ HELIUS_API_KEY = os.getenv("HELIUS_API_KEY")
 ALCHEMY_RPC_URL = os.getenv("ALCHEMY_RPC_URL")
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
 
+# Pump.fun API
+PUMPFUN_API_KEY = os.getenv("PUMPFUN_API_KEY", "")
+
+# Telegram Bot
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
 # App config
 CACHE_TTL_MINUTES = int(os.getenv("CACHE_TTL_MINUTES", "15"))
 MAX_TWEETS_PER_SCAN = int(os.getenv("MAX_TWEETS_PER_SCAN", "100"))
@@ -98,12 +105,19 @@ DNS_FALLBACK_IPS = {
     "api.dexscreener.com": ["104.21.42.12", "172.67.143.12"],
 }
 
-# Scoring thresholds (tunable)
-SCORING_CONFIG = {
-    "min_liquidity_usd": 10000,
-    "min_holders": 100,
-    "max_top10_concentration": 80,
-    "rsi_overbought": 70,
-    "rsi_oversold": 30,
-    "slippage_test_amounts": [0.1, 1, 10],  # SOL
-}
+# ── Monitor Thresholds (dùng chung cho lp_detector + health_checker + coin_adder) ──
+MIN_LIQ_T0       = 2_000    # $2k — T0 gate (liq quá thấp → skip luôn)
+MIN_MCAP_T2      = 10_000   # $10k — T2 market cap gate
+MIN_LIQ_T2       = 5_000    # $5k — T2 liquidity gate
+MIN_HOLDERS_T2   = 10       # T2 holder count gate
+MAX_TOP10_PCT    = 80       # T4 — top10 holder concentration max
+DEGRADE_REMOVE_H = 24       # Giờ — xóa coin degraded sau X giờ
+
+# Birdeye budget
+MAX_BIRDEYE_CALLS_PER_DAY = 80
+
+# Score thresholds
+SCORE_MOON       = 85   # MOON badge + Telegram alert
+SCORE_ACTIVE_MIN = 30   # Dưới → degrade
+SCORE_RECOVER    = 40   # Trên → recover từ degraded → active
+PASS_COUNT_MIN   = 3    # Số filter pass tối thiểu để status=active

@@ -221,8 +221,28 @@ class BirdeyeClient:
         return data.get("items") if data else None
     
     async def get_smart_money_stats(self, mint: str) -> Optional[dict]:
-        """Get smart money stats for token (may require higher tier)."""
-        return await self._request("/smart_money/token_stats", {"address": mint})
+        """
+        Get top traders for token (proxy for smart money).
+
+        Old endpoint /smart_money/token_stats returns 301 (deprecated).
+        Using /defi/v2/tokens/top_traders instead — returns high-volume wallets.
+        """
+        data = await self._request("/defi/v2/tokens/top_traders", {
+            "address": mint,
+            "time_frame": "24h",
+            "sort_type": "desc",
+            "sort_by": "volume",
+        })
+        if not data:
+            return None
+        items = data.get("items", [])
+        # Filter: only wallets with significant buy volume (>$10k)
+        wallets = [
+            {"address": t["owner"], "volume": t.get("volume", 0), "buy_volume": t.get("volumeBuy", 0)}
+            for t in items
+            if t.get("volumeBuy", 0) > 10_000
+        ]
+        return {"wallets": wallets} if wallets else {"wallets": []}
 
     # ════════════════════════════════════════════════════════════════════════
     # LITE+ TIER ENDPOINTS (Requires paid plan)

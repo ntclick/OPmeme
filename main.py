@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from collections import defaultdict
+import asyncio
 import time
 import logging
 
@@ -96,8 +97,19 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.on_event("startup")
 async def startup():
-    """Create DB tables on first run."""
+    """Create DB tables + start PumpScan monitor background tasks."""
     init_db()
+
+    # Start PumpScan background tasks
+    from monitor.health_checker import health_checker_loop
+    from monitor.lp_detector import lp_detector_loop
+    from monitor.pumpfun_ws import pumpfun_ws_loop
+    from monitor.telegram_bot import start_telegram_bot
+
+    asyncio.create_task(pumpfun_ws_loop())                    # real-time, <1s latency
+    asyncio.create_task(lp_detector_loop(interval_seconds=30))  # fallback poll
+    asyncio.create_task(health_checker_loop(interval_seconds=120))
+    asyncio.create_task(start_telegram_bot())
 
 
 @app.on_event("shutdown")
@@ -112,6 +124,12 @@ async def shutdown():
 async def serve_frontend():
     """Serve the frontend SPA."""
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/monitor", include_in_schema=False)
+async def monitor_page():
+    """Serve the PumpScan monitor dashboard."""
+    return FileResponse(str(STATIC_DIR / "monitor.html"))
 
 
 @app.get("/favicon.ico", include_in_schema=False)

@@ -269,6 +269,65 @@ class OpenGradientAnalyzer:
             logger.error(f"Inference failed: {e}")
             return {"error": str(e), "used_opengradient": False}
 
+    async def evaluate_monitor_coin(self, context: dict) -> dict:
+        """
+        F5 — LLM scoring for PumpScan monitor pipeline.
+
+        Lightweight eval: verdict (alert/watch/skip), score_boost, risk_flags.
+        Uses haiku for speed + cost (monitor runs this for every coin that passes T4).
+        """
+        if not self._initialized:
+            return {"verdict": "watch", "score_boost": 0, "risk_flags": [], "error": self._init_error}
+
+        prompt = f"""Evaluate this Solana pump.fun meme coin for short-term trading potential.
+
+Token: {context.get('symbol', '?')} ({context.get('mint', '?')[:12]}...)
+DEX: {context.get('dex', '?')}
+
+Metrics:
+- Market cap: ${context.get('mcap', 0):,.0f}
+- Liquidity: ${context.get('liq', 0):,.0f}
+- Holders: {context.get('holders', 0)}
+- Migration time (pump→DEX): {(context.get('migration_sec') or 0) // 60}m
+- Top traders (smart money): {context.get('smart_money_count', 0)}
+- Top10 holder %: {context.get('top10_pct', 0)}%
+- Filter pass: {context.get('pass_count', 0)}/5
+
+Social: twitter={bool(context.get('twitter'))} telegram={bool(context.get('telegram'))}
+
+Respond ONLY with valid JSON:
+{{"verdict": "alert" | "watch" | "skip", "score_boost": -10 to 10, "risk_flags": ["flag1"], "reasoning": "1 sentence"}}"""
+
+        try:
+            model = self.model_map.get("anthropic/claude-haiku-4-5", og.TEE_LLM.CLAUDE_HAIKU_4_5)
+            result = await self._llm_instance.chat(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200,
+                temperature=0.1,
+                x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL,
+            )
+            raw = result.chat_output
+            if isinstance(raw, dict) and "content" in raw:
+                raw = raw["content"]
+            elif hasattr(raw, "content"):
+                raw = raw.content
+            else:
+                raw = str(raw)
+
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            parsed = json.loads(raw[start:end])
+            return {
+                "verdict": parsed.get("verdict", "watch"),
+                "score_boost": max(-10, min(10, int(parsed.get("score_boost", 0)))),
+                "risk_flags": parsed.get("risk_flags", []),
+                "reasoning": parsed.get("reasoning", ""),
+            }
+        except Exception as e:
+            logger.warning(f"F5 LLM eval failed: {e}")
+            return {"verdict": "watch", "score_boost": 0, "risk_flags": [], "error": str(e)}
+
     async def analyze_coin_stream(self, ticker: str, tweets_summary: list, on_chain_data: dict, scoring_result: dict, llm_model: Optional[str] = None) -> AsyncGenerator[dict, None]:
         if not self._initialized: 
             yield {"type": "done", "result": {"error": self._init_error}}

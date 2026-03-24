@@ -117,6 +117,49 @@ class HolderSnapshot(Base):
     report = relationship("AnalysisReport", back_populates="holder_snapshot")
 
 
+class WatchedCoin(Base):
+    __tablename__ = "watched_coins"
+
+    mint = Column(Text, primary_key=True)
+    symbol = Column(Text, nullable=False, index=True)
+    name = Column(Text)
+    dex = Column(Text)                    # Raydium, Orca, Meteora, Pump.fun, etc.
+    status = Column(Text, nullable=False, default="active")  # active|degraded|removed
+    score = Column(Integer, default=0)
+    mcap = Column(Float, default=0)
+    liq = Column(Float, default=0)
+    holders = Column(Integer, default=0)
+    smart_money = Column(Text)          # JSON array of wallet addresses
+    pump_created_at = Column(Integer)    # unix timestamp — khi token được tạo trên pump.fun
+    lp_added_at = Column(Integer)       # unix timestamp — khi LP được tạo trên DEX (Raydium, Orca...)
+    last_checked = Column(Integer)      # unix timestamp
+    degraded_at = Column(Integer)       # unix timestamp, nullable
+    filter_t0 = Column(Boolean, default=False)
+    filter_t1 = Column(Boolean, default=False)
+    filter_t2 = Column(Boolean, default=False)
+    filter_t3 = Column(Boolean, default=False)
+    filter_t4 = Column(Boolean, default=False)
+    birdeye_checked = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    events = relationship("EventLog", back_populates="watched_coin", cascade="all, delete-orphan")
+
+
+class EventLog(Base):
+    __tablename__ = "event_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mint = Column(Text, ForeignKey("watched_coins.mint", ondelete="CASCADE"), nullable=False, index=True)
+    symbol = Column(Text)
+    event_type = Column(Text, nullable=False)  # new|ok|sm|out|warn|dead
+    message = Column(Text)
+    score = Column(Integer)
+    created_at = Column(Integer, nullable=False)  # unix timestamp
+
+    watched_coin = relationship("WatchedCoin", back_populates="events")
+
+
 class CacheEntry(Base):
     __tablename__ = "cache_entries"
 

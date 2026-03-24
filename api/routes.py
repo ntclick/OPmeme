@@ -1633,3 +1633,42 @@ async def get_trending(db: Session = Depends(get_db)):
 async def clear_cache():
     await cache.clear()
     return {"status": "ok"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PUMPSCAN MONITOR ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/watching")
+def get_watching(db: Session = Depends(get_db)):
+    """Return all watched coins with events for the PumpScan dashboard."""
+    return crud.get_all_watched(db)
+
+
+@router.get("/api/events")
+def get_events(limit: int = 500, db: Session = Depends(get_db)):
+    """Return recent events across all watched coins."""
+    return crud.get_events(db, limit=limit)
+
+
+@router.get("/api/dashboard-stats")
+def get_dashboard_stats(db: Session = Depends(get_db)):
+    """Return aggregate stats for the PumpScan dashboard."""
+    return crud.get_dashboard_stats(db)
+
+
+class WatchRequest(BaseModel):
+    mint: str
+
+@router.post("/api/watch")
+async def watch_coin(req: WatchRequest):
+    """User adds a coin to watch list. Runs T0-T4 pipeline."""
+    from monitor.coin_adder import add_coin
+    return await add_coin(req.mint)
+
+
+@router.post("/api/unwatch")
+async def unwatch_coin(req: WatchRequest):
+    """User removes a coin from watch list."""
+    from monitor.coin_adder import remove_coin
+    return await remove_coin(req.mint)
