@@ -121,3 +121,8 @@ SCORE_MOON       = 85   # MOON badge + Telegram alert
 SCORE_ACTIVE_MIN = 30   # Dưới → degrade
 SCORE_RECOVER    = 40   # Trên → recover từ degraded → active
 PASS_COUNT_MIN   = 3    # Số filter pass tối thiểu để status=active
+
+# Pending coin thresholds (light scan → deep scan promotion)
+PENDING_AUTO_PROMOTE_LIQ = 2_000   # $ — auto deep-scan khi liq đạt mức này
+PENDING_MAX_AGE_H = 6              # Giờ — xóa pending coin cũ hơn X giờ
+NEW_MAX_AGE_H = 1                  # Giờ — xóa coin "new" chưa graduate sau 1h

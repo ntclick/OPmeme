@@ -137,6 +137,16 @@
         <!-- Right: Stats -->
         <div class="flex items-center gap-3 md:gap-5 text-xs font-mono overflow-x-auto no-scrollbar">
             <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+                <span class="text-gray-500">New</span>
+                <span class="font-bold text-sky-400" id="hNew">0</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                <span class="text-gray-500">Pending</span>
+                <span class="font-bold text-cyan-400" id="hPending">0</span>
+            </div>
+            <div class="flex items-center gap-1.5">
                 <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
                 <span class="text-gray-500">Watching</span>
                 <span class="font-bold text-blue-400" id="hWatching">0</span>
@@ -192,6 +202,12 @@
             <div class="flex flex-col gap-1">
                 <button class="sb-f active flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all" data-filter="all">
                     <span class="text-gray-300">Tất cả</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fAll">0</span>
+                </button>
+                <button class="sb-f flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all" data-filter="new">
+                    <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span><span class="text-gray-300">New</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fNew">0</span>
+                </button>
+                <button class="sb-f flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all" data-filter="pending">
+                    <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span><span class="text-gray-300">Pending</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fPending">0</span>
                 </button>
                 <button class="sb-f flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all" data-filter="active">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span class="text-gray-300">Active</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fActive">0</span>
@@ -365,9 +381,12 @@
                 <div class="text-[11px] text-gray-500 font-mono break-all mt-1" id="detMint"></div>
                 <!-- Action buttons -->
                 <div class="flex gap-2 mt-3">
-                    <a id="detAnalyzeBtn" href="#" class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary/15 border border-primary/25 text-primary text-xs font-bold hover:bg-primary/25 transition">
-                        <i data-lucide="shield" class="w-3.5 h-3.5"></i> Audit (AI)
-                    </a>
+                    <button id="detDeepScanBtn" class="hidden flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-cyan-500/15 border border-cyan-500/25 text-cyan-400 text-xs font-bold hover:bg-cyan-500/25 transition">
+                        <i data-lucide="scan" class="w-3.5 h-3.5"></i> Deep Scan
+                    </button>
+                    <button id="detAiCheckBtn" class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-purple-500/15 border border-purple-500/25 text-purple-400 text-xs font-bold hover:bg-purple-500/25 transition">
+                        <i data-lucide="brain" class="w-3.5 h-3.5"></i> AI Check
+                    </button>
                     <a id="detDexLink" href="#" target="_blank" class="flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs hover:bg-white/10 transition">
                         <i data-lucide="external-link" class="w-3 h-3"></i> DexScreener
                     </a>
@@ -421,8 +440,8 @@ let filteredCoins = [];
 let selectedMint = null;
 let statusFilter = 'all';
 let timeFilter = 'all';
-let sortCol = 'score';
-let sortDir = -1;
+let sortCol = 'pump_created_at';
+let sortDir = -1;  // newest first
 
 // ── Helpers ──────────────────────────────────────────────────────
 function fmt(ts) {
@@ -462,6 +481,10 @@ function scoreConfig(s) {
 function statusBadge(c) {
     if (c.score >= 85 && c.status === 'active')
         return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-purple-500/15 text-purple-400 border border-purple-500/30"><i data-lucide="rocket" class="w-2.5 h-2.5"></i>MOON</span>`;
+    if (c.status === 'new')
+        return `<span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-sky-500/10 text-sky-400 border border-sky-500/25">NEW</span>`;
+    if (c.status === 'pending')
+        return `<span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/25">Pending</span>`;
     if (c.status === 'active')
         return `<span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/10 text-primary border border-emerald-500/25">Active</span>`;
     if (c.status === 'degraded')
@@ -530,6 +553,8 @@ function applyFilters() {
     const minHold = +document.getElementById('sHold').value;
 
     filteredCoins = allCoins.filter(c => {
+        if (statusFilter === 'new' && c.status !== 'new') return false;
+        if (statusFilter === 'pending' && c.status !== 'pending') return false;
         if (statusFilter === 'active' && c.status !== 'active') return false;
         if (statusFilter === 'degraded' && c.status !== 'degraded') return false;
         if (statusFilter === 'removed' && c.status !== 'removed') return false;
@@ -555,6 +580,7 @@ function applyFilters() {
             case 'holders': va = a.holders||0; vb = b.holders||0; break;
             case 'sm': va = (a.smart_money||[]).length; vb = (b.smart_money||[]).length; break;
             case 'lp_added_at': va = a.lp_added_at||0; vb = b.lp_added_at||0; break;
+            case 'pump_created_at': va = a.pump_created_at||0; vb = b.pump_created_at||0; break;
             case 'age': va = getNow()-(a.lp_added_at||getNow()); vb = getNow()-(b.lp_added_at||getNow()); break;
             case 'filter': va = filterPassCount(a.filter); vb = filterPassCount(b.filter); break;
             case 'last_checked': va = a.last_checked||0; vb = b.last_checked||0; break;
@@ -578,9 +604,13 @@ function renderAll() {
 }
 
 function renderHeader() {
+    const n = allCoins.filter(c => c.status === 'new').length;
+    const p = allCoins.filter(c => c.status === 'pending').length;
     const a = allCoins.filter(c => c.status === 'active').length;
     const d = allCoins.filter(c => c.status === 'degraded').length;
     const r = allCoins.filter(c => c.status === 'removed').length;
+    document.getElementById('hNew').textContent = n;
+    document.getElementById('hPending').textContent = p;
     document.getElementById('hWatching').textContent = a;
     document.getElementById('hDegraded').textContent = d;
     document.getElementById('hRemoved').textContent = r;
@@ -590,6 +620,8 @@ function renderHeader() {
 
 function renderSidebarCounts() {
     document.getElementById('fAll').textContent = allCoins.length;
+    document.getElementById('fNew').textContent = allCoins.filter(c => c.status === 'new').length;
+    document.getElementById('fPending').textContent = allCoins.filter(c => c.status === 'pending').length;
     document.getElementById('fActive').textContent = allCoins.filter(c => c.status === 'active').length;
     document.getElementById('fDegraded').textContent = allCoins.filter(c => c.status === 'degraded').length;
     document.getElementById('fRemoved').textContent = allCoins.filter(c => c.status === 'removed').length;
@@ -615,7 +647,8 @@ function renderCoinTable() {
             const cls = last && last.type === 'out' ? 'bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.5)]' : 'bg-primary shadow-[0_0_6px_rgba(0,255,157,0.5)]';
             return `<span class="inline-block w-3 h-3 rounded-full ${cls}" title="${shortAddr(w)}"></span>`;
         }).join('');
-        return `<tr data-mint="${c.mint}" class="${c.mint===selectedMint?'selected':''}">
+        const pendingCls = (c.status === 'new' || c.status === 'pending') ? 'opacity-60' : '';
+        return `<tr data-mint="${c.mint}" class="${c.mint===selectedMint?'selected':''} ${pendingCls}">
             <td><span class="font-semibold text-white">${c.symbol}</span><span class="block text-[10px] text-gray-500 truncate">${c.name||''}</span></td>
             <td><span class="text-[10px] font-mono text-gray-400">${c.dex||'—'}</span></td>
             <td>${statusBadge(c)}</td>
@@ -687,10 +720,29 @@ function renderDetail(mint) {
     document.getElementById('detMint').textContent = c.mint;
 
     // Action buttons
-    document.getElementById('detAnalyzeBtn').href = `/?contract=${c.mint}`;
+    const deepBtn = document.getElementById('detDeepScanBtn');
+    if (c.status === 'pending' && !c.deep_scanned) {
+        deepBtn.classList.remove('hidden');
+    } else {
+        deepBtn.classList.add('hidden');
+    }
     document.getElementById('detDexLink').href = `https://dexscreener.com/solana/${c.mint}`;
-    document.getElementById('detAiResult').classList.add('hidden');
-    document.getElementById('detAiResult').innerHTML = '';
+
+    // Show cached AI analysis if available
+    const aiBox = document.getElementById('detAiResult');
+    if (c.ai_analysis) {
+        aiBox.classList.remove('hidden');
+        const a = c.ai_analysis;
+        let html = '';
+        if (a.ai_trust_score != null) html += `<div class="font-bold text-white mb-1">🛡 Score: ${a.ai_trust_score}/100 — ${a.risk_level || ''}</div>`;
+        if (a.verdict) html += `<div class="mb-2">${a.verdict}</div>`;
+        if (a.red_flags && a.red_flags.length) html += `<div class="text-red-400 text-[10px] mt-1">🚩 ${a.red_flags.join(' · ')}</div>`;
+        if (a.green_flags && a.green_flags.length) html += `<div class="text-primary text-[10px] mt-1">✅ ${a.green_flags.join(' · ')}</div>`;
+        aiBox.innerHTML = html || JSON.stringify(a);
+    } else {
+        aiBox.classList.add('hidden');
+        aiBox.innerHTML = '';
+    }
 
     // Metrics
     const sc = scoreConfig(c.score);
@@ -902,75 +954,68 @@ document.getElementById('detRemoveBtn').addEventListener('click', async () => {
     } catch {}
 });
 
-// Analyze coin (inline AI via streaming)
-document.getElementById('detAnalyzeBtn').addEventListener('click', async (e) => {
-    e.preventDefault();
+// Deep Scan button (Tier 2: T1-T4)
+document.getElementById('detDeepScanBtn').addEventListener('click', async () => {
     if (!selectedMint) return;
-    const c = allCoins.find(x => x.mint === selectedMint);
+    const btn = document.getElementById('detDeepScanBtn');
     const box = document.getElementById('detAiResult');
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> Scanning...';
     box.classList.remove('hidden');
-    box.innerHTML = '<span class="text-gray-500">🔍 Analyzing with OpenGradient AI...</span>';
-
+    box.innerHTML = '<span class="text-gray-500">🔬 Running deep scan (T1-T4)...</span>';
     try {
-        const res = await fetch('/api/analyze/stream', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-                contract_address: selectedMint,
-                ticker: c ? c.symbol : '',
-                llm_model: 'anthropic/claude-sonnet-4-6'
-            }),
+        const res = await fetch('/api/monitor/deep-scan', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mint: selectedMint}),
         });
-        if (!res.ok) {
-            // Fallback to non-stream
-            const r2 = await fetch('/api/analyze', {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ contract_address: selectedMint, ticker: c ? c.symbol : '' }),
-            });
-            const data = await r2.json();
-            if (data.verdict) {
-                box.innerHTML = `<div class="font-bold text-white mb-1">Score: ${data.overall_score}/100 — ${data.risk_level}</div><div>${data.verdict}</div>`;
-            } else if (data.error) {
-                box.innerHTML = `<span class="text-red-400">❌ ${data.error}</span>`;
-            }
-            return;
+        const data = await res.json();
+        if (data.ok) {
+            box.innerHTML = `<div class="text-primary font-bold">✅ Deep scan complete: ${data.pass_count}/5 pass → ${data.status} (score ${data.score})</div>`;
+            loadData();
+        } else {
+            box.innerHTML = `<span class="text-red-400">❌ ${data.error}</span>`;
         }
-        // Stream SSE
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let resultHtml = '';
-        box.innerHTML = '';
-        while (true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, {stream: true});
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                try {
-                    const d = JSON.parse(line.slice(6));
-                    if (d.type === 'result' && d.data) {
-                        const r = d.data;
-                        resultHtml = `<div class="font-bold text-white mb-1">🛡 Score: ${r.overall_score}/100 — ${r.risk_level}</div>`;
-                        if (r.verdict) resultHtml += `<div class="mb-2">${r.verdict}</div>`;
-                        if (r.red_flags && r.red_flags.length) resultHtml += `<div class="text-red-400 text-[10px] mt-1">🚩 ${r.red_flags.join(' · ')}</div>`;
-                        if (r.green_flags && r.green_flags.length) resultHtml += `<div class="text-primary text-[10px] mt-1">✅ ${r.green_flags.join(' · ')}</div>`;
-                        box.innerHTML = resultHtml;
-                    } else if (d.type === 'meta') {
-                        box.innerHTML = `<span class="text-gray-500">⏳ ${d.data.status || 'Analyzing...'}</span>`;
-                    } else if (d.type === 'error') {
-                        box.innerHTML = `<span class="text-red-400">❌ ${d.data.error || 'Analysis failed'}</span>`;
-                    }
-                } catch {}
-            }
-        }
-        if (!resultHtml) box.innerHTML = box.innerHTML || '<span class="text-gray-500">Analysis complete</span>';
     } catch(err) {
         box.innerHTML = `<span class="text-red-400">❌ ${err.message}</span>`;
     }
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="scan" class="w-3.5 h-3.5"></i> Deep Scan';
+    lucide.createIcons();
+});
+
+// AI Check button (OpenGradient Claude Sonnet 4.6)
+document.getElementById('detAiCheckBtn').addEventListener('click', async () => {
+    if (!selectedMint) return;
+    const btn = document.getElementById('detAiCheckBtn');
+    const box = document.getElementById('detAiResult');
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> Analyzing...';
+    box.classList.remove('hidden');
+    box.innerHTML = '<span class="text-gray-500">🧠 Analyzing with Claude Sonnet 4.6 via OpenGradient...</span>';
+    try {
+        const res = await fetch('/api/monitor/ai-check', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mint: selectedMint}),
+        });
+        const data = await res.json();
+        if (data.ok && data.analysis) {
+            const a = data.analysis;
+            let html = '';
+            if (a.ai_trust_score != null) html += `<div class="font-bold text-white mb-1">🛡 Score: ${a.ai_trust_score}/100 — ${a.risk_level || ''}</div>`;
+            if (a.verdict) html += `<div class="mb-2">${a.verdict}</div>`;
+            if (a.red_flags && a.red_flags.length) html += `<div class="text-red-400 text-[10px] mt-1">🚩 ${a.red_flags.join(' · ')}</div>`;
+            if (a.green_flags && a.green_flags.length) html += `<div class="text-primary text-[10px] mt-1">✅ ${a.green_flags.join(' · ')}</div>`;
+            box.innerHTML = html || '<span class="text-gray-500">Analysis complete</span>';
+            loadData();
+        } else {
+            box.innerHTML = `<span class="text-red-400">❌ ${data.error || 'Analysis failed'}</span>`;
+        }
+    } catch(err) {
+        box.innerHTML = `<span class="text-red-400">❌ ${err.message}</span>`;
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="brain" class="w-3.5 h-3.5"></i> AI Check';
+    lucide.createIcons();
 });
 
 // ── Init ─────────────────────────────────────────────────────────

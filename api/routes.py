@@ -1672,3 +1672,74 @@ async def unwatch_coin(req: WatchRequest):
     """User removes a coin from watch list."""
     from monitor.coin_adder import remove_coin
     return await remove_coin(req.mint)
+
+
+@router.post("/api/monitor/deep-scan")
+async def deep_scan_coin(req: WatchRequest):
+    """Trigger Tier 2 deep scan (T1-T4) for a pending/degraded coin."""
+    from monitor.lp_detector import run_deep_scan
+    return await run_deep_scan(req.mint)
+
+
+@router.post("/api/monitor/ai-check")
+async def monitor_ai_check(req: WatchRequest, db: Session = Depends(get_db)):
+    """On-demand AI analysis using OpenGradient Claude Sonnet 4.6."""
+    from database.models import WatchedCoin
+    import json, time as _time
+
+    coin = db.query(WatchedCoin).filter(WatchedCoin.mint == req.mint).first()
+    if not coin:
+        return {"ok": False, "error": "Coin not found"}
+
+    sm = json.loads(coin.smart_money) if coin.smart_money else []
+    context = {
+        "symbol": coin.symbol,
+        "mint": coin.mint,
+        "dex": coin.dex,
+        "mcap": coin.mcap or 0,
+        "liq": coin.liq or 0,
+        "holders": coin.holders or 0,
+        "score": coin.score,
+        "status": coin.status,
+        "smart_money_count": len(sm),
+        "pass_count": sum([coin.filter_t0, coin.filter_t1, coin.filter_t2, coin.filter_t3, coin.filter_t4]),
+        "filter": {"t0": coin.filter_t0, "t1": coin.filter_t1, "t2": coin.filter_t2, "t3": coin.filter_t3, "t4": coin.filter_t4},
+        "pump_created_at": coin.pump_created_at,
+        "lp_added_at": coin.lp_added_at,
+    }
+
+    # Build analysis input
+    on_chain_data = {
+        "market_cap": context["mcap"],
+        "liquidity": context["liq"],
+        "holders": context["holders"],
+        "smart_money_wallets": len(sm),
+        "dex": context["dex"],
+        "filter_pipeline": f"{context['pass_count']}/5 pass",
+    }
+    scoring_result = {
+        "overall_score": coin.score,
+        "filter_t0": coin.filter_t0, "filter_t1": coin.filter_t1,
+        "filter_t2": coin.filter_t2, "filter_t3": coin.filter_t3, "filter_t4": coin.filter_t4,
+    }
+
+    try:
+        from analysis.opengradient import OpenGradientAnalyzer
+        analyzer = OpenGradientAnalyzer()
+        result = await analyzer.analyze_coin(
+            ticker=coin.symbol,
+            tweets_summary=[],
+            on_chain_data=on_chain_data,
+            scoring_result=scoring_result,
+            llm_model="anthropic/claude-sonnet-4-6",
+        )
+
+        # Store in DB
+        ai_data = result.get("ai_result", {})
+        coin.ai_analysis = json.dumps(ai_data)
+        coin.ai_scanned_at = int(_time.time())
+        db.commit()
+
+        return {"ok": True, "analysis": ai_data, "model": "claude-sonnet-4-6"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

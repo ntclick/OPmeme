@@ -140,6 +140,9 @@ class WatchedCoin(Base):
     filter_t3 = Column(Boolean, default=False)
     filter_t4 = Column(Boolean, default=False)
     birdeye_checked = Column(Boolean, default=False)
+    deep_scanned = Column(Boolean, default=False)     # True after Tier 2 (T1-T4) completes
+    ai_analysis = Column(Text)                         # JSON string of AI verdict
+    ai_scanned_at = Column(Integer)                    # unix timestamp of last AI analysis
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
