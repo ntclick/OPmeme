@@ -476,6 +476,12 @@ async def process_candidate(mint: str, dex_name: str = "Unknown", helius_ts: int
 
         t0 = True
         pump_created_at = pf["created_timestamp"]
+
+        # Reject old coins — only track coins created within last 6 hours
+        if pump_created_at and (now - pump_created_at) > 6 * 3600:
+            logger.debug(f"  T0 SKIP {symbol} — too old ({(now - pump_created_at) // 3600}h)")
+            return
+
         # Prefer pump.fun name/symbol over DexScreener
         if pf["symbol"]:
             symbol = pf["symbol"]
@@ -746,6 +752,11 @@ async def process_candidate_light(mint: str, dex_name: str = "Unknown", helius_t
         symbol = pf["symbol"] or "???"
         name = pf["name"] or ""
         pump_created_at = pf["created_timestamp"]
+
+        # Reject old coins — only track coins created within last 6 hours
+        if pump_created_at and (now - pump_created_at) > 6 * 3600:
+            logger.debug(f"  LIGHT SKIP {symbol} — too old ({(now - pump_created_at) // 3600}h)")
+            return
 
         # DexScreener lookup (free) — ok if returns nothing
         dex_pair = await _dexscreener_lookup(mint)

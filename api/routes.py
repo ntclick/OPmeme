@@ -1743,3 +1743,35 @@ async def monitor_ai_check(req: WatchRequest, db: Session = Depends(get_db)):
         return {"ok": True, "analysis": ai_data, "model": "claude-sonnet-4-6"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.post("/api/monitor/purge-old")
+async def purge_old_coins(db: Session = Depends(get_db)):
+    """Remove coins older than 24h (pending) or 7d (removed) to keep dashboard clean."""
+    from database.models import WatchedCoin, EventLog
+    import time as _time
+    now = int(_time.time())
+    removed = 0
+
+    # Remove pending coins older than 6h
+    old_pending = db.query(WatchedCoin).filter(
+        WatchedCoin.status == "pending",
+        WatchedCoin.lp_added_at < now - 6 * 3600,
+    ).all()
+    for c in old_pending:
+        db.query(EventLog).filter(EventLog.mint == c.mint).delete()
+        db.delete(c)
+        removed += 1
+
+    # Remove "removed" coins older than 7d
+    old_removed = db.query(WatchedCoin).filter(
+        WatchedCoin.status == "removed",
+        WatchedCoin.last_checked < now - 7 * 86400,
+    ).all()
+    for c in old_removed:
+        db.query(EventLog).filter(EventLog.mint == c.mint).delete()
+        db.delete(c)
+        removed += 1
+
+    db.commit()
+    return {"ok": True, "removed": removed}
