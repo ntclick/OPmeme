@@ -9,14 +9,13 @@
 
 import asyncio
 import time
-import json
 import logging
 import httpx
 
 from config import (
-    BIRDEYE_API_KEY,
-    MIN_MCAP_T2, MIN_LIQ_T2, MIN_HOLDERS_T2, MAX_TOP10_PCT,
+    MIN_MCAP_T2, MIN_LIQ_T2, MIN_HOLDERS_T2,
     DEGRADE_REMOVE_H, SCORE_ACTIVE_MIN, SCORE_RECOVER, PASS_COUNT_MIN,
+    PENDING_AUTO_PROMOTE_LIQ, PENDING_MAX_AGE_H,
 )
 from database.engine import SessionLocal
 from database.models import WatchedCoin
@@ -51,7 +50,8 @@ async def check_one_coin(coin: WatchedCoin) -> dict | None:
     changes = {}
     events = []
 
-    # Fetch fresh DexScreener data
+    # Fetch fresh DexScreener data (FREE — no Birdeye calls in routine health checks)
+    # Birdeye is only used during deep scan or user-click to save API budget
     dex = await _fetch_dex_data(coin.mint)
     new_mcap = coin.mcap or 0
     new_liq = coin.liq or 0
@@ -61,47 +61,6 @@ async def check_one_coin(coin: WatchedCoin) -> dict | None:
         new_mcap = dex.get("fdv", 0) or dex.get("marketCap", 0) or 0
         liq_data = dex.get("liquidity", {})
         new_liq = liq_data.get("usd", 0) if isinstance(liq_data, dict) else 0
-
-    # Get holder count + smart money from Birdeye
-    smart_money_wallets = json.loads(coin.smart_money) if coin.smart_money else []
-    birdeye_overview = None
-
-    if BIRDEYE_API_KEY:
-        try:
-            from scrapers.birdeye_client import create_birdeye_client
-            be = create_birdeye_client()
-            birdeye_overview = await be.get_token_overview(coin.mint)
-            if birdeye_overview:
-                new_holders = birdeye_overview.get("holder", new_holders) or new_holders
-                if new_mcap == 0:
-                    new_mcap = birdeye_overview.get("mc", 0) or birdeye_overview.get("marketCap", 0) or 0
-                if new_liq == 0:
-                    new_liq = birdeye_overview.get("liquidity", 0) or 0
-
-            # Check smart money
-            sm_data = await be.get_smart_money_stats(coin.mint)
-            if sm_data:
-                new_wallets = []
-                sm_items = sm_data.get("wallets", []) or sm_data.get("items", [])
-                if isinstance(sm_items, list):
-                    new_wallets = [w.get("address", w) if isinstance(w, dict) else str(w) for w in sm_items[:10]]
-
-                # Detect new smart money entries
-                old_set = set(smart_money_wallets)
-                new_set = set(new_wallets)
-                entered = new_set - old_set
-                exited = old_set - new_set
-
-                for w in entered:
-                    events.append(("sm", f"{w[:8]}... MUA vào"))
-                for w in exited:
-                    events.append(("out", f"{w[:8]}... BÁN/RÚT"))
-
-                if new_wallets != smart_money_wallets:
-                    smart_money_wallets = new_wallets
-                    changes["smart_money"] = json.dumps(smart_money_wallets) if smart_money_wallets else None
-        except Exception as e:
-            logger.warning(f"Birdeye check failed for {coin.symbol}: {e}")
 
     # Update metrics
     changes["mcap"] = new_mcap
@@ -160,7 +119,7 @@ async def run_health_check():
     db = SessionLocal()
     try:
         coins = db.query(WatchedCoin).filter(
-            WatchedCoin.status.in_(["active", "degraded"])
+            WatchedCoin.status.in_(["active", "degraded", "pending"])
         ).all()
 
         if not coins:
@@ -170,6 +129,51 @@ async def run_health_check():
         logger.info(f"🏥 Health check: {len(coins)} coins")
         checked = 0
 
+        # Separate by status for different processing
+        pending_coins = [c for c in coins if c.status == "pending"]
+        active_coins = [c for c in coins if c.status in ("active", "degraded")]
+
+        # Process pending coins: refresh DexScreener, auto-promote or auto-remove
+        for coin in pending_coins:
+            try:
+                now = int(time.time())
+                age_h = (now - (coin.lp_added_at or coin.last_checked or now)) / 3600
+
+                # Auto-remove stale pending coins
+                if age_h > PENDING_MAX_AGE_H:
+                    coin.status = "removed"
+                    db.commit()
+                    log_event(db, coin.mint, coin.symbol, "dead",
+                              f"Pending expired ({age_h:.1f}h > {PENDING_MAX_AGE_H}h)", score=coin.score)
+                    checked += 1
+                    continue
+
+                # Refresh DexScreener only (free)
+                dex = await _fetch_dex_data(coin.mint)
+                if dex:
+                    new_mcap = dex.get("fdv", 0) or dex.get("marketCap", 0) or 0
+                    liq_data = dex.get("liquidity", {})
+                    new_liq = liq_data.get("usd", 0) if isinstance(liq_data, dict) else 0
+                    coin.mcap = new_mcap
+                    coin.liq = new_liq
+                    coin.last_checked = now
+                    coin.score = calculate_score(1, 0, new_mcap)
+                    db.commit()
+
+                    # Auto-promote if liquidity meets threshold
+                    if new_liq >= PENDING_AUTO_PROMOTE_LIQ:
+                        from monitor.lp_detector import run_deep_scan
+                        logger.info(f"  ⬆️ Auto-promote {coin.symbol} — liq=${new_liq:,.0f}")
+                        await run_deep_scan(coin.mint)
+
+                checked += 1
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Error checking pending {coin.symbol}: {e}")
+                db.rollback()
+
+        # Process active/degraded coins (existing logic)
+        coins = active_coins
         for coin in coins:
             try:
                 result = await check_one_coin(coin)

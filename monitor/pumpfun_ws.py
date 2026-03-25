@@ -1,13 +1,13 @@
 # monitor/pumpfun_ws.py — Real-time pump.fun migration detection via WebSocket
 #
-# pumpportal.fun cung cấp WS API public (không cần key):
-#   - subscribeNewToken: coin mới tạo trên pump.fun
-#   - subscribeMigration: coin graduate (bonding curve complete → add LP on Raydium)
+# pumpportal.fun WS API (public, no auth):
+#   - subscribeMigration: coin graduate → add LP on DEX
 #
 # Flow:
-#   WS event "migrate" → process_candidate() → T0→T1→T2→T3→T4 → DB + Telegram
+#   "migrate" → process_candidate_light() → status="pending" (free APIs only)
 #
-# Latency: <1 giây sau khi migrate (vs 30s poll Helius)
+# NOTE: Không subscribe "create" vì pump.fun tạo ~1000 coin/phút → tràn DB.
+#       Chỉ bắt migrate events = coin đã graduate, có LP trên DEX.
 
 import asyncio
 import json
@@ -16,24 +16,29 @@ import time
 
 import websockets
 
+from database.engine import SessionLocal
+from database.models import WatchedCoin
+
 logger = logging.getLogger(__name__)
 
 WS_URL = "wss://pumpportal.fun/api/data"
 RECONNECT_DELAY = 5  # seconds
 
+# Stats
+_ws_stats = {"connected_at": 0, "migrations": 0, "errors": 0}
 
-async def subscribe_migrations(callback):
-    """
-    Subscribe to pump.fun migration events via WebSocket.
 
-    callback: async function(mint, dex_name, helius_ts)
-    """
+async def pumpfun_ws_loop():
+    """Listen to pump.fun WebSocket for migration events only."""
+    from monitor.lp_detector import process_candidate_light
+
     while True:
         try:
             async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=10) as ws:
-                # Subscribe to migration events (coin graduate → DEX)
+                # Only subscribe to migrations — NOT newToken (too noisy)
                 await ws.send(json.dumps({"method": "subscribeMigration"}))
-                logger.info("🔌 pump.fun WebSocket connected — listening for migrations")
+                _ws_stats["connected_at"] = int(time.time())
+                logger.info("🔌 pump.fun WS connected — subscribed to migration events")
 
                 async for raw in ws:
                     try:
@@ -42,26 +47,30 @@ async def subscribe_migrations(callback):
                         continue
 
                     tx_type = data.get("txType", "")
-                    if tx_type != "migrate":
-                        continue
-
                     mint = data.get("mint")
                     if not mint:
                         continue
 
-                    ts = data.get("timestamp") or int(time.time())
-                    pool = data.get("pool") or "Unknown"
+                    if tx_type == "migrate":
+                        ts = data.get("timestamp") or int(time.time())
+                        dex = data.get("dex") or "Raydium"
 
-                    logger.info(f"🚀 WS migration: {mint[:8]}... → {pool}")
+                        # Skip if already in DB
+                        db = SessionLocal()
+                        try:
+                            existing = db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first()
+                            if existing:
+                                continue
+                        finally:
+                            db.close()
 
-                    try:
-                        await callback(
-                            mint=mint,
-                            dex_name="Raydium",  # pump.fun graduates go to Raydium
-                            helius_ts=ts,
-                        )
-                    except Exception as e:
-                        logger.error(f"Callback error for {mint[:8]}...: {e}")
+                        _ws_stats["migrations"] += 1
+                        logger.info(f"🚀 WS migrate: {mint[:8]}... → {dex}")
+                        try:
+                            await process_candidate_light(mint=mint, dex_name=dex, helius_ts=ts)
+                        except Exception as e:
+                            _ws_stats["errors"] += 1
+                            logger.error(f"Migration callback error {mint[:8]}...: {e}")
 
         except websockets.ConnectionClosed as e:
             logger.warning(f"pump.fun WS closed: {e}, reconnecting in {RECONNECT_DELAY}s")
@@ -69,10 +78,3 @@ async def subscribe_migrations(callback):
             logger.warning(f"pump.fun WS error: {e}, reconnecting in {RECONNECT_DELAY}s")
 
         await asyncio.sleep(RECONNECT_DELAY)
-
-
-async def pumpfun_ws_loop():
-    """Start pump.fun WebSocket listener — auto-reconnect."""
-    from monitor.lp_detector import process_candidate
-    logger.info("🔌 Starting pump.fun WebSocket listener")
-    await subscribe_migrations(process_candidate)

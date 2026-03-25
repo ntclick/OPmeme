@@ -41,9 +41,10 @@ import logging
 import httpx
 
 from config import (
-    HELIUS_API_KEY, BIRDEYE_API_KEY,
-    MIN_LIQ_T0, MIN_MCAP_T2, MIN_LIQ_T2, MAX_TOP10_PCT,
+    HELIUS_API_KEY, BIRDEYE_API_KEY, PUMPFUN_API_KEY,
+    MIN_LIQ_T0, MIN_MCAP_T2, MIN_LIQ_T2, MIN_HOLDERS_T2, MAX_TOP10_PCT,
     MAX_BIRDEYE_CALLS_PER_DAY, SCORE_MOON, PASS_COUNT_MIN,
+    PENDING_AUTO_PROMOTE_LIQ,
 )
 from database.engine import SessionLocal
 from database.models import WatchedCoin
@@ -652,6 +653,296 @@ def _save_coin(db, mint, symbol, name, dex_name, status,
         log_event(db, mint, symbol, "warn", f"Degraded — {', '.join(reasons) or 'low score'}", score=score)
 
 
+# save_new_token removed — pump.fun creates ~1000 coins/min, saving all would flood DB.
+# Only migrate events (graduated coins) are tracked via process_candidate_light().
+
+
+async def poll_pumpfun_graduates():
+    """
+    Fallback: poll pump.fun API for recently graduated coins.
+    Uses /coins?sort=last_trade_timestamp which returns mix of graduated + non-graduated.
+    We filter for complete=True + raydium_pool.
+    Called every 30s from lp_detector_loop.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            headers = {}
+            if PUMPFUN_API_KEY:
+                headers["x-api-key"] = PUMPFUN_API_KEY
+
+            count = 0
+            db = SessionLocal()
+            try:
+                # Fetch 2 pages of recently active coins — filter for graduated
+                for offset in [0, 50]:
+                    resp = await client.get(
+                        f"{PUMPFUN_API}/coins?offset={offset}&limit=50"
+                        f"&sort=last_trade_timestamp&order=DESC&includeNsfw=false",
+                        headers=headers, timeout=10,
+                    )
+                    if resp.status_code != 200:
+                        break
+                    coins = resp.json()
+                    if not isinstance(coins, list) or not coins:
+                        break
+
+                    for c in coins:
+                        mint = c.get("mint")
+                        if not mint:
+                            continue
+                        # Only graduated coins (complete + raydium_pool)
+                        if not c.get("complete") or not c.get("raydium_pool"):
+                            continue
+                        # Skip old coins (>6h since creation)
+                        ct = c.get("created_timestamp", 0)
+                        if ct and ct > 1e12:
+                            ct = int(ct / 1000)
+                        if ct and (time.time() - ct) > 6 * 3600:
+                            continue
+                        # Skip if already in DB
+                        if db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first():
+                            continue
+                        # Light scan (free APIs only)
+                        await process_candidate_light(mint, "Raydium")
+                        count += 1
+                        await asyncio.sleep(0.5)
+
+                    await asyncio.sleep(0.3)
+            finally:
+                db.close()
+
+            if count:
+                logger.info(f"  pump.fun poll: {count} new graduates found")
+            return count
+        except Exception as e:
+            logger.debug(f"poll_pumpfun_graduates error: {e}")
+            return 0
+
+
+async def process_candidate_light(mint: str, dex_name: str = "Unknown", helius_ts: int = None):
+    """
+    Tier 1 — Light scan: 0 paid API calls.
+    Creates a "pending" entry for every pump.fun graduate.
+    Only uses pump.fun API (free) + DexScreener (free).
+    """
+    db = SessionLocal()
+    try:
+        if db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first():
+            return
+
+        now = int(time.time())
+
+        # Verify pump.fun origin (free)
+        pf = await _pumpfun_lookup(mint)
+        if not pf or not pf["is_pumpfun"]:
+            return
+
+        # Creator blacklist (free)
+        creator_ok = await _check_creator(pf.get("creator"))
+        if not creator_ok:
+            logger.info(f"  LIGHT SKIP {pf.get('symbol', '?')} — creator blacklisted")
+            return
+
+        symbol = pf["symbol"] or "???"
+        name = pf["name"] or ""
+        pump_created_at = pf["created_timestamp"]
+
+        # DexScreener lookup (free) — ok if returns nothing
+        dex_pair = await _dexscreener_lookup(mint)
+        mcap = 0
+        liq = 0
+        lp_created_at = helius_ts or now
+
+        if dex_pair:
+            base = dex_pair.get("baseToken", {})
+            if not symbol or symbol == "???":
+                symbol = base.get("symbol", symbol)
+            if not name:
+                name = base.get("name", name)
+            mcap = dex_pair.get("fdv", 0) or dex_pair.get("marketCap", 0) or 0
+            liq_data = dex_pair.get("liquidity", {})
+            liq = liq_data.get("usd", 0) if isinstance(liq_data, dict) else 0
+            pair_ts = dex_pair.get("pairCreatedAt", 0)
+            if pair_ts and pair_ts > 1e12:
+                lp_created_at = int(pair_ts / 1000)
+            elif pair_ts:
+                lp_created_at = int(pair_ts)
+            ds_dex = (dex_pair.get("dexId") or "").lower()
+            if ds_dex in DEXSCREENER_DEX_MAP:
+                dex_name = DEXSCREENER_DEX_MAP[ds_dex]
+
+        score = calculate_score(1, 0, mcap)  # only T0 pass
+
+        coin = WatchedCoin(
+            mint=mint, symbol=symbol, name=name, dex=dex_name,
+            status="pending", score=score, mcap=mcap, liq=liq, holders=0,
+            pump_created_at=pump_created_at, lp_added_at=lp_created_at,
+            last_checked=now, filter_t0=True,
+            filter_t1=False, filter_t2=False, filter_t3=False, filter_t4=False,
+            birdeye_checked=False, deep_scanned=False,
+        )
+        db.add(coin)
+        db.commit()
+
+        log_event(db, mint, symbol, "new",
+                  f"pump.fun → {dex_name} | MCap {'${:,.0f}'.format(mcap) if mcap else '$0'} | Liq {'${:,.0f}'.format(liq) if liq else '$0'} | pending",
+                  score=score)
+
+        logger.info(f"  ⚡ LIGHT {symbol} ({mint[:8]}...) on {dex_name} | mcap=${mcap:,.0f} liq=${liq:,.0f} | pending")
+
+        # Telegram alert (light — no need for full pipeline info)
+        from monitor.telegram_alert import send_message
+        await send_message(
+            f"⚡ <b>NEW: ${symbol}</b> (pending)\n"
+            f"🏦 {dex_name} | MCap {'${:,.0f}'.format(mcap) if mcap else '$0'} | Liq {'${:,.0f}'.format(liq) if liq else '$0'}\n"
+            f"🔗 <code>{mint}</code>\n"
+            f"📈 <a href=\"https://dexscreener.com/solana/{mint}\">DexScreener</a>"
+        )
+
+    except Exception as e:
+        logger.error(f"Light scan error {mint[:12]}...: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+async def run_deep_scan(mint: str) -> dict:
+    """
+    Tier 2 — Deep scan: runs T1-T4 on an existing pending/degraded coin.
+    Called on-demand (user click) or auto-promote by health_checker.
+    Returns updated coin data dict.
+    """
+    db = SessionLocal()
+    try:
+        coin = db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first()
+        if not coin:
+            return {"ok": False, "error": "Coin not found"}
+        if coin.deep_scanned:
+            return {"ok": True, "already": True, "symbol": coin.symbol, "status": coin.status, "score": coin.score}
+
+        now = int(time.time())
+        symbol = coin.symbol
+        mcap = coin.mcap or 0
+        liq = coin.liq or 0
+        holders = coin.holders or 0
+        dex_name = coin.dex or "Unknown"
+
+        # Refresh DexScreener data
+        dex_pair = await _dexscreener_lookup(mint)
+        if dex_pair:
+            mcap = dex_pair.get("fdv", 0) or dex_pair.get("marketCap", 0) or mcap
+            liq_data = dex_pair.get("liquidity", {})
+            liq = liq_data.get("usd", 0) if isinstance(liq_data, dict) else liq
+
+        # ── T1: On-chain check ──
+        t1_result = await _solana_rpc_check(mint)
+        t1 = t1_result["pass"]
+
+        # ── T2: Market metrics ──
+        t2 = mcap >= MIN_MCAP_T2 and liq >= MIN_LIQ_T2
+
+        # ── T3: Smart money (Birdeye — gated) ──
+        smart_money_wallets = []
+        t3 = False
+        if BIRDEYE_API_KEY and _check_birdeye_budget():
+            try:
+                from scrapers.birdeye_client import create_birdeye_client
+                be = create_birdeye_client()
+                overview = await be.get_token_overview(mint)
+                _use_birdeye_call()
+                if overview:
+                    holders = overview.get("holder", 0) or 0
+                    if mcap == 0:
+                        mcap = overview.get("mc", 0) or overview.get("marketCap", 0) or 0
+                sm_data = await be.get_smart_money_stats(mint)
+                _use_birdeye_call()
+                if sm_data:
+                    sm_items = sm_data.get("wallets", []) or sm_data.get("items", [])
+                    if isinstance(sm_items, list):
+                        smart_money_wallets = [
+                            w.get("address", w) if isinstance(w, dict) else str(w)
+                            for w in sm_items[:10]
+                        ]
+                t3 = True
+            except Exception as e:
+                logger.warning(f"  T3 Birdeye failed for {symbol}: {e}")
+        elif not BIRDEYE_API_KEY:
+            t3 = True
+
+        # ── T4: Birdeye deep scan ──
+        t4 = False
+        birdeye_checked = False
+        if t3 and BIRDEYE_API_KEY and _check_birdeye_budget():
+            try:
+                from scrapers.birdeye_client import create_birdeye_client
+                be = create_birdeye_client()
+                security = await be.get_token_security(mint)
+                _use_birdeye_call()
+                birdeye_checked = True
+                if security:
+                    t4 = security.get("top10HolderPercent", 100) < MAX_TOP10_PCT
+                else:
+                    t4 = True
+            except Exception as e:
+                logger.warning(f"  T4 Birdeye failed for {symbol}: {e}")
+
+        # ── Score + Update ──
+        pass_count = sum([True, t1, t2, t3, t4])  # T0 always True
+        score = calculate_score(pass_count, holders, mcap)
+        status = "active" if pass_count >= PASS_COUNT_MIN else "degraded"
+
+        coin.score = score
+        coin.status = status
+        coin.mcap = mcap
+        coin.liq = liq
+        coin.holders = holders
+        coin.filter_t1 = t1
+        coin.filter_t2 = t2
+        coin.filter_t3 = t3
+        coin.filter_t4 = t4
+        coin.birdeye_checked = birdeye_checked
+        coin.deep_scanned = True
+        coin.last_checked = now
+        coin.smart_money = json.dumps(smart_money_wallets) if smart_money_wallets else coin.smart_money
+        if status == "degraded":
+            coin.degraded_at = now
+        db.commit()
+
+        # Log events
+        log_event(db, mint, symbol, "ok" if status == "active" else "warn",
+                  f"Deep scan: {pass_count}/5 pass. Score: {score} → {status}",
+                  score=score)
+        if smart_money_wallets:
+            for w in smart_money_wallets[:3]:
+                log_event(db, mint, symbol, "sm", f"{w[:8]}... smart money detected", score=score)
+
+        # Telegram alert for promoted coins
+        if status == "active":
+            from monitor.telegram_alert import alert_new_coin
+            await alert_new_coin(
+                symbol=symbol, mint=mint, dex=dex_name, score=score,
+                mcap=mcap, liq=liq, holders=holders,
+                pump_created_at=coin.pump_created_at, lp_added_at=coin.lp_added_at,
+                smart_money=smart_money_wallets, pass_count=pass_count,
+                t0=True, t1=t1, t2=t2, t3=t3, t4=t4,
+            )
+
+        logger.info(f"  🔬 DEEP {symbol} | {pass_count}/5 pass | score={score} → {status}")
+
+        return {
+            "ok": True, "symbol": symbol, "status": status, "score": score,
+            "mcap": mcap, "liq": liq, "holders": holders,
+            "pass_count": pass_count, "smart_money": len(smart_money_wallets),
+        }
+
+    except Exception as e:
+        logger.error(f"Deep scan error {mint[:12]}...: {e}")
+        db.rollback()
+        return {"ok": False, "error": str(e)}
+    finally:
+        db.close()
+
+
 async def flush_retry_queue():
     """Process coins that had liq=0 on first check (DexScreener not indexed yet)."""
     now = int(time.time())
@@ -708,7 +999,7 @@ async def scan_new_lps():
 
     count = 0
     for candidate in unique:
-        await process_candidate(
+        await process_candidate_light(
             mint=candidate["mint"],
             dex_name=candidate.get("dex", "Unknown"),
             helius_ts=candidate.get("timestamp"),
@@ -732,6 +1023,8 @@ async def lp_detector_loop(interval_seconds: int = 30):
             found = await scan_new_lps()
             if found:
                 logger.info(f"  Processed {found} candidates | Birdeye: {_birdeye_calls_today}/{MAX_BIRDEYE_CALLS_PER_DAY} used today")
+            # Poll pump.fun API for graduated coins (fallback for missed WS events)
+            await poll_pumpfun_graduates()
             # Flush retry queue (coins with liq=0 on first check)
             if _pending_retry:
                 await flush_retry_queue()

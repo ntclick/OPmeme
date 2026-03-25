@@ -145,8 +145,8 @@ def save_holder_snapshot(
 # ── WatchedCoin & EventLog CRUD ───────────────────────────────────
 
 def get_all_watched(db: Session) -> list[dict]:
-    """Return all watched coins with their events, formatted for API response."""
-    coins = db.query(WatchedCoin).all()
+    """Return all watched coins with their events, formatted for API response. Newest first."""
+    coins = db.query(WatchedCoin).order_by(WatchedCoin.lp_added_at.desc().nullsfirst()).all()
     result = []
     for c in coins:
         events = db.query(EventLog).filter(EventLog.mint == c.mint).order_by(EventLog.created_at.asc()).all()
@@ -174,6 +174,8 @@ def get_all_watched(db: Session) -> list[dict]:
                 "t4": c.filter_t4,
             },
             "birdeye_checked": c.birdeye_checked,
+            "deep_scanned": bool(c.deep_scanned) if hasattr(c, 'deep_scanned') else False,
+            "ai_analysis": json.loads(c.ai_analysis) if getattr(c, 'ai_analysis', None) else None,
             "events": [
                 {"type": e.event_type, "msg": e.message, "ts": e.created_at, "score": e.score}
                 for e in events
@@ -202,6 +204,8 @@ def get_dashboard_stats(db: Session) -> dict:
     """Return aggregate stats for the dashboard."""
     coins = db.query(WatchedCoin).all()
     total = len(coins)
+    new = sum(1 for c in coins if c.status == "new")
+    pending = sum(1 for c in coins if c.status == "pending")
     active = sum(1 for c in coins if c.status == "active")
     removed = sum(1 for c in coins if c.status == "removed")
     sm = sum(1 for c in coins if c.smart_money and json.loads(c.smart_money))
@@ -212,6 +216,8 @@ def get_dashboard_stats(db: Session) -> dict:
     avg_age = sum(ages) / len(ages) if ages else 0
     return {
         "total": total,
+        "new": new,
+        "pending": pending,
         "active": active,
         "removed": removed,
         "smart_money": sm,
