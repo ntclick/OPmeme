@@ -1775,3 +1775,46 @@ async def purge_old_coins(db: Session = Depends(get_db)):
 
     db.commit()
     return {"ok": True, "removed": removed}
+
+
+# ── Quick Token Info (Helius-only, 0 Birdeye) ──────────────────────
+_quick_info_cache: dict[str, tuple[float, dict]] = {}  # mint -> (timestamp, data)
+QUICK_INFO_TTL = 300  # 5 min cache
+
+
+@router.get("/api/token/quick-info")
+async def get_token_quick_info(mint: str):
+    """Lightweight on-chain token info via Helius RPC. FREE — zero Birdeye calls."""
+    import time as _time
+
+    # Cache check
+    if mint in _quick_info_cache:
+        ts, data = _quick_info_cache[mint]
+        if _time.time() - ts < QUICK_INFO_TTL:
+            return data
+
+    from scrapers.solana_scraper import SolanaScraper
+    scraper = SolanaScraper()
+
+    token_info = await scraper.get_token_info(mint)
+    if not token_info:
+        raise HTTPException(status_code=404, detail="Token not found on-chain")
+
+    holders_data = await scraper.get_top_holders(mint, top_n=20, prefetched_token_info=token_info)
+
+    result = {
+        "mint": token_info.get("mint", mint),
+        "symbol": token_info.get("symbol"),
+        "supply": token_info.get("supply"),
+        "decimals": token_info.get("decimals"),
+        "mint_authority": token_info.get("mint_authority"),
+        "freeze_authority": token_info.get("freeze_authority"),
+        "is_mint_renounced": token_info.get("is_mint_renounced", False),
+        "top10_pct": holders_data.get("top10_pct") if holders_data else None,
+        "top20_pct": holders_data.get("top20_pct") if holders_data else None,
+        "largest_holder_pct": holders_data.get("largest_holder_pct") if holders_data else None,
+        "top_holders": (holders_data.get("holders") or [])[:10] if holders_data else [],
+    }
+
+    _quick_info_cache[mint] = (_time.time(), result)
+    return result

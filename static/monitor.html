@@ -336,6 +336,7 @@
                                 <th style="width:78px" data-sort="age">Tồn tại <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:90px" data-sort="filter">Filter <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:108px" data-sort="last_checked">Checked <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
+                                <th style="width:55px">AI</th>
                             </tr>
                         </thead>
                         <tbody id="coinTableBody"></tbody>
@@ -514,6 +515,7 @@ let allCoins = [];
 let allEvents = [];
 let filteredCoins = [];
 let selectedMint = null;
+let trendingDetailCache = {}; // mint -> {dexData, heliusData}
 let statusFilter = 'all';
 let timeFilter = 'all';
 let sortCol = 'pump_created_at';
@@ -707,7 +709,7 @@ function renderSidebarCounts() {
 function renderCoinTable() {
     const tb = document.getElementById('coinTableBody');
     if (!filteredCoins.length) {
-        tb.innerHTML = `<tr><td colspan="12" class="text-center py-16 text-gray-500">
+        tb.innerHTML = `<tr><td colspan="13" class="text-center py-16 text-gray-500">
             <div class="flex flex-col items-center gap-3">
                 <i data-lucide="radar" class="w-10 h-10 text-gray-600"></i>
                 <div class="text-sm font-medium">Chưa có coin nào</div>
@@ -737,6 +739,7 @@ function renderCoinTable() {
             <td class="text-gray-500 font-mono text-[11px]">${fmtAge(c.lp_added_at)}</td>
             <td>${filterCol(c)}</td>
             <td class="text-gray-600 font-mono text-[11px]">${fmt(c.last_checked)}</td>
+            <td><button onclick="event.stopPropagation(); openAiChat('${c.mint}')" class="px-1.5 py-1 rounded bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[9px] hover:bg-purple-500/20 transition"><i data-lucide="brain" class="w-3 h-3 inline"></i></button></td>
         </tr>`;
     }).join('');
     lucide.createIcons();
@@ -915,6 +918,11 @@ function closeDetail() {
 // Tabs
 document.querySelectorAll('.mon-tab').forEach(tab => {
     tab.addEventListener('click', () => {
+        // Close detail panel on tab switch
+        const det = document.getElementById('detail');
+        det.style.width = '0'; det.classList.remove('open');
+        selectedMint = null;
+        document.getElementById('detRemoveBtn').style.display = '';
         document.querySelectorAll('.mon-tab').forEach(t => { t.classList.remove('active'); t.classList.add('border-transparent'); t.classList.remove('text-primary','border-primary'); t.classList.add('text-gray-500'); });
         document.querySelectorAll('.tab-p').forEach(p => p.classList.add('hidden'));
         tab.classList.add('active','text-primary','border-primary');
@@ -1163,10 +1171,12 @@ function sendQuick(text) {
     sendAiMessage(text);
 }
 
-// AI Check button → opens chat modal
+// AI Check button → opens chat modal (works for both watched + trending)
 document.getElementById('detAiCheckBtn').addEventListener('click', () => {
     if (!selectedMint) return;
-    openAiChat(selectedMint);
+    const watched = allCoins.find(c => c.mint === selectedMint);
+    if (watched) openAiChat(selectedMint);
+    else openAiChatTrending(selectedMint);
 });
 
 // ── Trending Tab (DexScreener) ──────────────────────────────────
@@ -1224,13 +1234,23 @@ async function loadTrending() {
             const price = p.priceUsd ? parseFloat(p.priceUsd) : 0;
             const created = p.pairCreatedAt ? Math.floor(p.pairCreatedAt / 1000) : 0;
 
+            // Cache DexScreener data for detail panel
+            trendingDetailCache[t.tokenAddress] = {
+                dexData: { symbol, name, mint: t.tokenAddress, price, priceChange: p.priceChange || {},
+                    mcap, liq, vol24h: vol, buys, sells, pairCreatedAt: created,
+                    dexUrl: p.url || `https://dexscreener.com/solana/${t.tokenAddress}`,
+                    dexId: p.dexId || '', boost: t.totalAmount || t.amount || 0 },
+                heliusData: trendingDetailCache[t.tokenAddress]?.heliusData || null,
+            };
+
             const pcColor = v => v > 0 ? 'text-primary' : v < 0 ? 'text-red-400' : 'text-gray-500';
             const pcFmt = v => (v > 0 ? '+' : '') + v.toFixed(1) + '%';
             const priceFmt = price < 0.001 ? '$' + price.toExponential(2) : price < 1 ? '$' + price.toFixed(4) : '$' + price.toFixed(2);
 
             const tr = document.createElement('tr');
             tr.className = 'hover:bg-white/[.02] cursor-pointer transition-colors border-b border-white/[.03]';
-            tr.onclick = () => window.open(`https://dexscreener.com/solana/${t.tokenAddress}`, '_blank');
+            tr.dataset.mint = t.tokenAddress;
+            tr.onclick = () => renderTrendingDetail(t.tokenAddress);
             tr.innerHTML = `
                 <td class="text-gray-500 text-center">${i + 1}</td>
                 <td>
@@ -1249,8 +1269,8 @@ async function loadTrending() {
                 </td>
                 <td class="text-xs text-gray-500">${created ? fmtAge(created) : '—'}</td>
                 <td>
-                    <button onclick="event.stopPropagation(); addToWatch('${t.tokenAddress}')" class="px-2 py-1 rounded bg-primary/10 border border-primary/20 text-primary text-[10px] hover:bg-primary/20 transition">
-                        + Watch
+                    <button onclick="event.stopPropagation(); openAiChatTrending('${t.tokenAddress}')" class="px-2 py-1 rounded bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[10px] hover:bg-purple-500/20 transition flex items-center gap-1">
+                        <i data-lucide="brain" class="w-3 h-3"></i> AI
                     </button>
                 </td>
             `;
@@ -1263,30 +1283,129 @@ async function loadTrending() {
     }
 }
 
-async function addToWatch(mint) {
-    try {
-        const res = await fetch('/api/watch', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({mint}),
-        });
-        const data = await res.json();
-        if (data.ok) {
-            loadData();
-            // Switch to Pump.fun tab
-            document.querySelectorAll('.mon-tab').forEach(t => {
-                t.classList.remove('active','text-primary','border-primary');
-                t.classList.add('border-transparent','text-gray-500');
-            });
-            const coinsTab = document.querySelector('[data-tab="coins"]');
-            coinsTab.classList.add('active','text-primary','border-primary');
-            document.querySelectorAll('.tab-p').forEach(p => p.classList.add('hidden'));
-            document.getElementById('panelCoins').classList.remove('hidden');
-        } else {
-            alert(data.error || 'Failed to add');
-        }
-    } catch (err) {
-        alert('Error: ' + err.message);
+async function renderTrendingDetail(mint) {
+    const cache = trendingDetailCache[mint];
+    if (!cache || !cache.dexData) return;
+    const d = cache.dexData;
+
+    selectedMint = mint;
+    const det = document.getElementById('detail');
+    det.style.width = '370px';
+    det.classList.add('open');
+
+    document.getElementById('detSymbol').textContent = d.symbol + (d.name ? ` (${d.name})` : '');
+    document.getElementById('detMint').textContent = mint;
+
+    // Action buttons: hide deep scan & remove, show AI Check & DexScreener
+    document.getElementById('detDeepScanBtn').classList.add('hidden');
+    document.getElementById('detRemoveBtn').style.display = 'none';
+    document.getElementById('detAiResult').classList.add('hidden');
+    document.getElementById('detDexLink').href = d.dexUrl;
+
+    // Metrics (DexScreener)
+    const pFmt = d.price < 0.001 ? '$'+d.price.toExponential(2) : d.price < 1 ? '$'+d.price.toFixed(4) : '$'+d.price.toFixed(2);
+    document.getElementById('detMetrics').innerHTML = [
+        {l:'Price', v:pFmt}, {l:'MCap', v:fmtMoney(d.mcap)},
+        {l:'Liquidity', v:fmtMoney(d.liq)}, {l:'Vol 24h', v:fmtMoney(d.vol24h)},
+    ].map(m => `<div class="bg-white/5 border border-white/10 rounded-lg p-3">
+        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">${m.l}</div>
+        <div class="font-mono text-lg font-bold mt-0.5 text-white">${m.v}</div>
+    </div>`).join('');
+
+    // Info
+    const pc = d.priceChange || {};
+    document.getElementById('detInfo').innerHTML = [
+        ['5m', `<span class="${(pc.m5||0)>0?'text-primary':'text-red-400'}">${(pc.m5||0)>0?'+':''}${(pc.m5||0).toFixed(1)}%</span>`],
+        ['1h', `<span class="${(pc.h1||0)>0?'text-primary':'text-red-400'}">${(pc.h1||0)>0?'+':''}${(pc.h1||0).toFixed(1)}%</span>`],
+        ['24h', `<span class="${(pc.h24||0)>0?'text-primary':'text-red-400'}">${(pc.h24||0)>0?'+':''}${(pc.h24||0).toFixed(1)}%</span>`],
+        ['Buys/Sells 24h', `<span class="text-primary">${d.buys}</span> / <span class="text-red-400">${d.sells}</span>`],
+        ['Pair Created', d.pairCreatedAt ? fmtAge(d.pairCreatedAt) + ' ago' : '—'],
+        ['DEX', d.dexId || '—'],
+        ['Source', '<span class="text-blue-400">DexScreener Trending</span>'],
+    ].map(([l,v]) => `<div class="flex justify-between items-center py-1 text-xs">
+        <span class="text-gray-500">${l}</span><span class="text-gray-300">${v}</span>
+    </div>`).join('');
+
+    // Pipeline: loading Helius
+    document.getElementById('detPipeline').innerHTML =
+        '<div class="text-xs text-gray-500 py-2 flex items-center gap-2"><span class="animate-spin">&#x27F3;</span> Loading on-chain data (Helius)...</div>';
+    document.getElementById('detSmWallets').innerHTML = '<span class="text-gray-600 text-xs">Click AI Check for smart money</span>';
+    document.getElementById('detTimeline').innerHTML = '<span class="text-gray-600 text-xs">N/A (trending)</span>';
+
+    // Highlight row
+    document.querySelectorAll('#trendingBody tr').forEach(tr =>
+        tr.classList.toggle('selected', tr.dataset.mint === mint));
+    lucide.createIcons();
+
+    // Fetch Helius data async
+    if (!cache.heliusData) {
+        try {
+            const res = await fetch(`/api/token/quick-info?mint=${mint}`);
+            if (res.ok) cache.heliusData = await res.json();
+        } catch (err) { console.error('quick-info failed:', err); }
     }
+
+    if (cache.heliusData) {
+        const h = cache.heliusData;
+        const checks = [
+            {l:'Mint Authority', pass:h.is_mint_renounced, v:h.is_mint_renounced?'Renounced ✓':'ACTIVE ⚠'},
+            {l:'Freeze Authority', pass:!h.freeze_authority, v:h.freeze_authority?'ACTIVE ⚠':'None ✓'},
+            {l:'Top 10 Holders', pass:(h.top10_pct||100)<80, v:h.top10_pct!=null?h.top10_pct.toFixed(1)+'%':'N/A'},
+            {l:'Largest Holder', pass:(h.largest_holder_pct||100)<30, v:h.largest_holder_pct!=null?h.largest_holder_pct.toFixed(1)+'%':'N/A'},
+        ];
+        document.getElementById('detPipeline').innerHTML = checks.map(c => `
+            <div class="flex items-center gap-2 py-1.5 text-xs">
+                <i data-lucide="${c.pass?'check':'x'}" class="w-3.5 h-3.5 ${c.pass?'text-primary':'text-red-400'} flex-shrink-0"></i>
+                <span class="flex-1 text-gray-400">${c.l}</span>
+                <span class="font-bold font-mono ${c.pass?'text-primary':'text-red-400'}">${c.v}</span>
+            </div>`).join('');
+
+        if (h.top_holders && h.top_holders.length) {
+            document.getElementById('detSmWallets').innerHTML =
+                '<div class="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-1">Top Holders (Helius)</div>' +
+                h.top_holders.slice(0, 8).map((holder, i) => `
+                    <div class="flex items-center gap-2 py-1 text-xs font-mono border-b border-white/[.03]">
+                        <span class="text-gray-500 w-4">${i+1}</span>
+                        <span class="text-gray-400 flex-1">${shortAddr(holder.address)}</span>
+                        <span class="text-gray-300">${holder.percentage?.toFixed(1)||'?'}%</span>
+                    </div>`).join('');
+        }
+        lucide.createIcons();
+    } else {
+        document.getElementById('detPipeline').innerHTML =
+            '<div class="text-xs text-red-400/60 py-2">Failed to load on-chain data</div>';
+    }
+}
+
+function openAiChatTrending(mint) {
+    const cache = trendingDetailCache[mint];
+    if (!cache || !cache.dexData) return;
+    const d = cache.dexData;
+    const h = cache.heliusData;
+
+    aiChatMint = mint;
+    aiChatHistory = [];
+    document.getElementById('aiChatModal').classList.remove('hidden');
+    document.getElementById('aiChatTitle').textContent = `${d.symbol} — AI Trading Assistant`;
+    document.getElementById('aiChatMessages').innerHTML = '';
+    document.getElementById('aiChatInput').value = '';
+    lucide.createIcons();
+
+    let prompt = `Phân tích nhanh ${d.symbol} (${mint}).`;
+    prompt += ` Price: $${d.price}, MCap: ${fmtMoney(d.mcap)}, Liq: ${fmtMoney(d.liq)},`;
+    prompt += ` Vol24h: ${fmtMoney(d.vol24h)}, Buys/Sells: ${d.buys}/${d.sells}.`;
+    const pc = d.priceChange || {};
+    if (pc.m5 != null) prompt += ` 5m: ${pc.m5>0?'+':''}${pc.m5.toFixed(1)}%, 1h: ${(pc.h1||0)>0?'+':''}${(pc.h1||0).toFixed(1)}%, 24h: ${(pc.h24||0)>0?'+':''}${(pc.h24||0).toFixed(1)}%.`;
+    if (h) {
+        prompt += ` Mint authority: ${h.is_mint_renounced ? 'renounced' : 'ACTIVE'}.`;
+        prompt += ` Freeze: ${h.freeze_authority ? 'ACTIVE' : 'none'}.`;
+        if (h.top10_pct != null) prompt += ` Top10: ${h.top10_pct.toFixed(1)}%.`;
+        if (h.largest_holder_pct != null) prompt += ` Largest holder: ${h.largest_holder_pct.toFixed(1)}%.`;
+    }
+    prompt += ` Source: DexScreener Trending. Đánh giá ngắn gọn và cho lời khuyên giao dịch.`;
+
+    sendAiMessage(prompt);
+    setTimeout(() => document.getElementById('aiChatInput').focus(), 200);
 }
 
 // ── Init ─────────────────────────────────────────────────────────
