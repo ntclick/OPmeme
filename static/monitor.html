@@ -210,7 +210,7 @@
             <div class="text-[9px] uppercase tracking-widest text-gray-500 font-bold mb-2">Status</div>
             <div class="flex flex-col gap-1">
                 <button class="sb-f active flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all" data-filter="all">
-                    <span class="text-gray-300">Tất cả</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fAll">0</span>
+                    <span class="text-gray-300">All</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fAll">0</span>
                 </button>
                 <button class="sb-f flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-all" data-filter="new">
                     <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span><span class="text-gray-300">New</span><span class="ml-auto text-gray-600 text-[10px] font-mono" id="fNew">0</span>
@@ -258,9 +258,9 @@
 
         <!-- Time Filter -->
         <div>
-            <div class="text-[9px] uppercase tracking-widest text-gray-500 font-bold mb-2">Thời gian tồn tại</div>
+            <div class="text-[9px] uppercase tracking-widest text-gray-500 font-bold mb-2">Age Filter</div>
             <div class="flex flex-wrap gap-1">
-                <button class="sb-t active px-2 py-1 rounded text-[10px] font-mono transition-all" data-time="all">Tất cả</button>
+                <button class="sb-t active px-2 py-1 rounded text-[10px] font-mono transition-all" data-time="all">All</button>
                 <button class="sb-t px-2 py-1 rounded text-[10px] font-mono transition-all" data-time="3600">&lt; 1h</button>
                 <button class="sb-t px-2 py-1 rounded text-[10px] font-mono transition-all" data-time="21600">&lt; 6h</button>
                 <button class="sb-t px-2 py-1 rounded text-[10px] font-mono transition-all" data-time="86400">&lt; 24h</button>
@@ -289,7 +289,7 @@
                 <span class="flex items-center gap-1.5"><i data-lucide="clock" class="w-3.5 h-3.5"></i> Timeline</span>
             </button>
             <button class="mon-tab px-4 py-3 text-xs font-semibold transition-all border-b-2 border-transparent" data-tab="stats">
-                <span class="flex items-center gap-1.5"><i data-lucide="bar-chart-2" class="w-3.5 h-3.5"></i> Thống kê</span>
+                <span class="flex items-center gap-1.5"><i data-lucide="bar-chart-2" class="w-3.5 h-3.5"></i> Stats</span>
             </button>
         </div>
 
@@ -342,7 +342,7 @@
                                 <th style="width:68px" data-sort="holders">Holders <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:76px" data-sort="sm">Smart $ <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:120px" data-sort="lp_added_at">LP Added <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
-                                <th style="width:78px" data-sort="age">Tồn tại <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
+                                <th style="width:78px" data-sort="age">Age <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:90px" data-sort="filter">Filter <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:108px" data-sort="last_checked">Checked <span class="sort-arrow text-[8px] opacity-40">▲</span></th>
                                 <th style="width:55px">AI</th>
@@ -359,10 +359,10 @@
                     <table class="mon-table">
                         <thead>
                             <tr>
-                                <th style="width:120px">Thời gian</th>
+                                <th style="width:120px">Time</th>
                                 <th style="width:85px">Symbol</th>
-                                <th style="width:100px">Sự kiện</th>
-                                <th>Chi tiết</th>
+                                <th style="width:100px">Event</th>
+                                <th>Details</th>
                                 <th style="width:70px">Score</th>
                             </tr>
                         </thead>
@@ -376,35 +376,35 @@
                 <!-- Row 1 -->
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                     <div class="glass-panel rounded-xl p-4 neon-border">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Tổng phát hiện</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Total Detected</div>
                         <div class="text-2xl font-bold mt-1 font-mono" id="stTotal">0</div>
                     </div>
                     <div class="glass-panel rounded-xl p-4">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Đang active</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Active</div>
                         <div class="text-2xl font-bold mt-1 font-mono text-primary" id="stActive">0</div>
                     </div>
                     <div class="glass-panel rounded-xl p-4">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Đã xóa</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Removed</div>
                         <div class="text-2xl font-bold mt-1 font-mono text-red-400" id="stRemoved">0</div>
                     </div>
                     <div class="glass-panel rounded-xl p-4">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Có Smart Money</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Smart Money</div>
                         <div class="text-2xl font-bold mt-1 font-mono text-purple-400" id="stSm">0</div>
                     </div>
                 </div>
                 <!-- Row 2 -->
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                     <div class="glass-panel rounded-xl p-4">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Pass sơ loại T0–T3</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Filter Pass T0–T3</div>
                         <div class="text-xl font-bold mt-1 font-mono" id="stPass">0 / 0</div>
                     </div>
                     <div class="glass-panel rounded-xl p-4">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Gọi Birdeye (T4)</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Birdeye Calls (T4)</div>
                         <div class="text-xl font-bold mt-1 font-mono text-blue-400" id="stBirdeye">0 / 0</div>
                         <div class="text-[10px] text-gray-600 mt-0.5" id="stSaved"></div>
                     </div>
                     <div class="glass-panel rounded-xl p-4">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Avg thời gian tồn tại</div>
+                        <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold">Avg Age</div>
                         <div class="text-xl font-bold mt-1 font-mono" id="stAvgAge">—</div>
                     </div>
                 </div>
@@ -448,7 +448,7 @@
 
             <!-- LP & Time -->
             <div class="mb-5">
-                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2 pb-1 border-b border-white/5">LP & Thời gian</div>
+                <div class="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2 pb-1 border-b border-white/5">LP & Time</div>
                 <div id="detInfo" class="space-y-1"></div>
             </div>
 
@@ -494,7 +494,7 @@
         <div id="aiChatMessages" class="flex-1 overflow-y-auto p-4 space-y-3 min-h-[300px] max-h-[55vh]"></div>
         <div class="p-3 border-t border-white/10 bg-white/[.02]">
             <div class="flex gap-2">
-                <input id="aiChatInput" type="text" placeholder="Hỏi về coin này..."
+                <input id="aiChatInput" type="text" placeholder="Ask about this coin..."
                     class="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-purple-500/50 focus:outline-none transition"
                     onkeydown="if(event.key==='Enter')sendAiChat()">
                 <button onclick="sendAiChat()" class="px-4 py-2 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition">
@@ -597,8 +597,8 @@ function eventBadge(type) {
     const m = {
         new:  ['LP Add',   'bg-blue-500/15 text-blue-400 border-blue-500/30'],
         ok:   ['Check OK', 'bg-emerald-500/10 text-primary border-emerald-500/25'],
-        sm:   ['SM Mua',   'bg-purple-500/15 text-purple-400 border-purple-500/30'],
-        out:  ['SM Rút',   'bg-red-500/10 text-red-400 border-red-500/25'],
+        sm:   ['SM Buy',   'bg-purple-500/15 text-purple-400 border-purple-500/30'],
+        out:  ['SM Exit',  'bg-red-500/10 text-red-400 border-red-500/25'],
         warn: ['Degraded', 'bg-yellow-500/10 text-yellow-400 border-yellow-500/25'],
         dead: ['Removed',  'bg-red-500/10 text-red-400 border-red-500/25'],
     };
@@ -733,8 +733,8 @@ function renderCoinTable() {
         tb.innerHTML = `<tr><td colspan="13" class="text-center py-16 text-gray-500">
             <div class="flex flex-col items-center gap-3">
                 <i data-lucide="radar" class="w-10 h-10 text-gray-600"></i>
-                <div class="text-sm font-medium">Chưa có coin nào</div>
-                <div class="text-xs text-gray-600">Paste pump.fun token address vào ô "Add Coin" bên trái<br>hoặc gửi <code>/watch</code> qua Telegram bot</div>
+                <div class="text-sm font-medium">No coins yet</div>
+                <div class="text-xs text-gray-600">Paste pump.fun token address in "Add Coin" on the left<br>or send <code>/watch</code> via Telegram bot</div>
             </div>
         </td></tr>`;
         lucide.createIcons();
@@ -789,7 +789,7 @@ function renderStats() {
     document.getElementById('stSm').textContent = sm;
     document.getElementById('stPass').textContent = `${p3} / ${allCoins.length}`;
     document.getElementById('stBirdeye').textContent = `${be} / ${allCoins.length}`;
-    document.getElementById('stSaved').textContent = `tiết kiệm ${allCoins.length - be} credits`;
+    document.getElementById('stSaved').textContent = `saved ${allCoins.length - be} credits`;
     if (allCoins.length) {
         const now = getNow();
         const avg = allCoins.reduce((s,c) => s + (now-(c.lp_added_at||now)), 0) / allCoins.length;
@@ -857,7 +857,7 @@ function renderDetail(mint) {
     </div>`).join('');
 
     // Info
-    // Migration time: khoảng cách từ pump.fun → DEX
+    // Migration time: pump.fun → DEX
     let migrationLabel = '';
     if (c.pump_created_at && c.lp_added_at) {
         const migSec = c.lp_added_at - c.pump_created_at;
@@ -871,7 +871,7 @@ function renderDetail(mint) {
         ['Pump.fun Created', c.pump_created_at ? fmt(c.pump_created_at) : '—'],
         ['LP Added (DEX)', fmt(c.lp_added_at)],
         ['Migration time', migrationLabel || '—'],
-        ['Tồn tại (từ LP)', fmtAge(c.lp_added_at)],
+        ['Age (from LP)', fmtAge(c.lp_added_at)],
         ['Status', statusBadge(c)],
         ['Last check', fmt(c.last_checked)],
         ['Degraded at', c.degraded_at ? fmt(c.degraded_at) : '—'],
@@ -900,7 +900,7 @@ function renderDetail(mint) {
             <span class="font-bold font-mono ${color}">${result}</span>
         </div>`;
     }).join('');
-    if (!t3ok) pipe += `<div class="text-[10px] text-gray-600 ml-5 -mt-1 mb-1">↑ T3 fail → skip (tiết kiệm Birdeye credits)</div>`;
+    if (!t3ok) pipe += `<div class="text-[10px] text-gray-600 ml-5 -mt-1 mb-1">↑ T3 fail → skip (save Birdeye credits)</div>`;
     document.getElementById('detPipeline').innerHTML = pipe;
 
     // Smart Money
@@ -909,7 +909,7 @@ function renderDetail(mint) {
         ? wallets.map(w => `<div class="flex items-center gap-2 py-1.5 border-b border-white/[.03] text-xs font-mono">
             <span class="w-2.5 h-2.5 rounded-full bg-primary shadow-[0_0_4px_rgba(0,255,157,0.4)]"></span>${shortAddr(w)}
           </div>`).join('')
-        : '<span class="text-gray-600 text-xs">Không có</span>';
+        : '<span class="text-gray-600 text-xs">None</span>';
 
     // Events
     const dotColor = { new:'bg-blue-400 shadow-[0_0_6px_rgba(59,130,246,0.5)]', ok:'bg-primary', sm:'bg-purple-400 shadow-[0_0_6px_rgba(168,85,247,0.5)]', out:'bg-red-400', warn:'bg-yellow-400', dead:'bg-red-400' };
@@ -1051,7 +1051,7 @@ document.getElementById('addMintInput').addEventListener('keydown', e => { if (e
 document.getElementById('detRemoveBtn').addEventListener('click', async () => {
     if (!selectedMint) return;
     const c = allCoins.find(x => x.mint === selectedMint);
-    if (!confirm(`Xóa ${c ? c.symbol : selectedMint.slice(0,8)} khỏi watch list?`)) return;
+    if (!confirm(`Remove ${c ? c.symbol : selectedMint.slice(0,8)} from watch list?`)) return;
     try {
         await fetch('/api/unwatch', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({mint: selectedMint}) });
         closeDetail();
@@ -1135,7 +1135,7 @@ function addTypingIndicator() {
     el.id = 'aiTyping';
     el.className = 'flex justify-start';
     el.innerHTML = `<div class="px-3 py-2 rounded-xl text-xs bg-white/[.04] border border-white/10 text-gray-500">
-        <span class="inline-flex gap-1"><span class="animate-bounce">·</span><span class="animate-bounce" style="animation-delay:.15s">·</span><span class="animate-bounce" style="animation-delay:.3s">·</span></span> Đang phân tích...
+        <span class="inline-flex gap-1"><span class="animate-bounce">·</span><span class="animate-bounce" style="animation-delay:.15s">·</span><span class="animate-bounce" style="animation-delay:.3s">·</span></span> Analyzing...
     </div>`;
     box.appendChild(el);
     box.scrollTop = box.scrollHeight;
