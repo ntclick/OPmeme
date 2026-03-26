@@ -1777,6 +1777,34 @@ async def purge_old_coins(db: Session = Depends(get_db)):
     return {"ok": True, "removed": removed}
 
 
+@router.post("/api/monitor/seed")
+async def seed_from_ws():
+    """Collect pump.fun migrations via WebSocket for 120s to seed the DB."""
+    from monitor.pumpfun_ws import ws_seed_collect
+    count = await ws_seed_collect(duration_sec=120)
+    return {"ok": True, "count": count, "message": f"Collected {count} migrations in 120s"}
+
+
+@router.get("/api/monitor/ws-status")
+async def ws_status():
+    """Return WebSocket connection stats."""
+    from monitor.pumpfun_ws import get_ws_stats
+    from database.engine import SessionLocal
+    from database.models import WatchedCoin
+    db = SessionLocal()
+    try:
+        total = db.query(WatchedCoin).count()
+        pending = db.query(WatchedCoin).filter(WatchedCoin.status == "pending").count()
+        active = db.query(WatchedCoin).filter(WatchedCoin.status == "active").count()
+    finally:
+        db.close()
+    stats = get_ws_stats()
+    stats["db_total"] = total
+    stats["db_pending"] = pending
+    stats["db_active"] = active
+    return stats
+
+
 # ── Quick Token Info (Helius-only, 0 Birdeye) ──────────────────────
 _quick_info_cache: dict[str, tuple[float, dict]] = {}  # mint -> (timestamp, data)
 QUICK_INFO_TTL = 300  # 5 min cache

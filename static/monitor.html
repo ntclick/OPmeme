@@ -645,6 +645,29 @@ async function loadData() {
     renderAll();
 }
 
+async function refreshAll() { await loadData(); }
+
+async function seedFromWS() {
+    const btn = document.getElementById('seedBtn');
+    const status = document.getElementById('seedStatus');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning...'; }
+    if (status) { status.classList.remove('hidden'); status.textContent = 'Listening for pump.fun migrations (up to 2 min)...'; }
+
+    try {
+        const res = await fetch('/api/monitor/seed', { method: 'POST' });
+        const data = await res.json();
+        if (status) status.textContent = data.message || `Found ${data.count} coins`;
+        if (data.count > 0) {
+            await loadData();
+        } else {
+            if (status) status.textContent = 'No migrations detected. Pump.fun graduations happen ~1-5/hour. Try again later or add coins manually.';
+        }
+    } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '🌱 Scan Now (2 min)'; }
+}
+
 // ── Filtering ────────────────────────────────────────────────────
 function applyFilters() {
     const q = document.getElementById('searchInput').value.toLowerCase();
@@ -734,7 +757,16 @@ function renderCoinTable() {
             <div class="flex flex-col items-center gap-3">
                 <i data-lucide="radar" class="w-10 h-10 text-gray-600"></i>
                 <div class="text-sm font-medium">No coins yet</div>
-                <div class="text-xs text-gray-600">Paste pump.fun token address in "Add Coin" on the left<br>or send <code>/watch</code> via Telegram bot</div>
+                <div class="text-xs text-gray-600 mb-2">WebSocket is listening for pump.fun migrations in real-time.<br>New coins will appear automatically when they graduate.</div>
+                <div class="flex gap-2">
+                    <button onclick="seedFromWS()" id="seedBtn" class="px-4 py-2 rounded-lg bg-primary/10 border border-primary/25 text-primary text-xs font-bold hover:bg-primary/20 transition cursor-pointer">
+                        🌱 Scan Now (2 min)
+                    </button>
+                    <button onclick="refreshAll()" class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-gray-400 text-xs hover:bg-white/10 transition cursor-pointer">
+                        ↻ Refresh
+                    </button>
+                </div>
+                <div id="seedStatus" class="text-[10px] text-gray-600 hidden"></div>
             </div>
         </td></tr>`;
         lucide.createIcons();
