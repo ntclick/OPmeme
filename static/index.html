@@ -1339,11 +1339,26 @@
 
             } catch (error) {
                 clearInterval(progressInterval);
-                alert(t.errorPrefix + error.message);
-                btn.disabled = false;
                 loading.classList.remove('flex');
                 loading.classList.add('hidden');
-                hero.classList.remove('hidden');
+                btn.disabled = false;
+                // Show error with retry button instead of alert
+                const resultEl = document.getElementById('result');
+                if (resultEl) {
+                    resultEl.classList.remove('hidden');
+                    resultEl.innerHTML = `
+                        <div class="text-center py-12">
+                            <div class="text-yellow-400 text-lg mb-2">⚠️ ${error.message || 'AI service temporarily unavailable'}</div>
+                            <p class="text-gray-400 text-sm mb-4">The analysis could not be completed. This is usually a temporary issue.</p>
+                            <button onclick="document.getElementById('result').classList.add('hidden'); document.getElementById('hero')?.classList?.remove('hidden'); document.getElementById('audit-form')?.querySelector('button')?.click();"
+                                class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-emerald-400/10 border border-emerald-500/30 text-emerald-400 font-bold hover:from-emerald-500/30 transition cursor-pointer">
+                                🔄 Retry Analysis
+                            </button>
+                        </div>`;
+                } else {
+                    hero.classList.remove('hidden');
+                    alert(error.message);
+                }
             }
         }
 

@@ -1146,9 +1146,12 @@ function removeTypingIndicator() {
     if (el) el.remove();
 }
 
-async function sendAiMessage(text) {
-    addChatBubble('user', text);
-    aiChatHistory.push({role: 'user', content: text});
+let _lastAiMessage = '';
+
+async function sendAiMessage(text, isRetry = false) {
+    if (!isRetry) _lastAiMessage = text;
+    addChatBubble('user', isRetry ? '🔄 Retrying...' : text);
+    if (!isRetry) aiChatHistory.push({role: 'user', content: text});
     addTypingIndicator();
 
     try {
@@ -1163,8 +1166,18 @@ async function sendAiMessage(text) {
         });
         const data = await res.json();
         removeTypingIndicator();
-        const reply = data.content || data.detail || 'No response';
-        // Convert markdown-like formatting to HTML
+        const reply = data.content || data.detail || '';
+
+        // Check if AI failed
+        if (!reply || reply.includes('AI unavailable') || reply.includes('Stream error') || data.error) {
+            const errMsg = reply || data.error || 'AI service unavailable';
+            addChatBubble('ai', `<span class="text-yellow-400">⚠️ ${errMsg}</span>
+                <button onclick="retryAiMessage()" class="mt-2 px-3 py-1.5 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition cursor-pointer">
+                    🔄 Retry
+                </button>`);
+            return;
+        }
+
         const html = reply
             .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white">$1</strong>')
             .replace(/\n/g, '<br>')
@@ -1175,8 +1188,15 @@ async function sendAiMessage(text) {
         aiChatHistory.push({role: 'assistant', content: reply});
     } catch (err) {
         removeTypingIndicator();
-        addChatBubble('ai', `<span class="text-red-400">❌ ${err.message}</span>`);
+        addChatBubble('ai', `<span class="text-red-400">❌ ${err.message}</span>
+            <button onclick="retryAiMessage()" class="mt-2 px-3 py-1.5 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition cursor-pointer">
+                🔄 Retry
+            </button>`);
     }
+}
+
+function retryAiMessage() {
+    if (_lastAiMessage) sendAiMessage(_lastAiMessage, true);
 }
 
 function sendAiChat() {

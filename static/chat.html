@@ -495,11 +495,21 @@
         }
 
         // ── Actions ──────────────────────────────────────────────────────────
+        let _lastUserMsg = '';
+
+        function retryLastMessage() {
+            if (_lastUserMsg && !isProcessing) {
+                chatInput.value = _lastUserMsg;
+                sendMessage();
+            }
+        }
+
         async function sendMessage() {
             if (!chatInput) return;
             const msg = chatInput.value.trim();
             if (!msg || isProcessing) return;
 
+            _lastUserMsg = msg;
             isProcessing = true;
             if (sendBtn) sendBtn.disabled = true;
             chatInput.value = '';
@@ -583,8 +593,8 @@
                         } else if (event.type === 'fallback') {
                             removeTyping(typingId);
                             fullContent = event.content;
-                            appendAIMessage(fullContent);
-                            aiDiv = true; // mark as handled
+                            appendAIMessage(fullContent + `<br><button onclick="retryLastMessage()" class="mt-2 px-3 py-1.5 rounded-lg bg-purple-600/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition cursor-pointer">🔄 Retry</button>`);
+                            aiDiv = true;
 
                         } else if (event.type === 'done') {
                             removeTyping(typingId);
@@ -603,7 +613,7 @@
                 if (aiContentEl) {
                     aiContentEl.innerHTML = formatAIText(fullContent);
                 } else if (!analysisShown) {
-                    appendAIMessage(`⚠️ Error: ${err.message}`);
+                    appendAIMessage(`⚠️ Error: ${err.message}<br><button onclick="retryLastMessage()" class="mt-2 px-3 py-1.5 rounded-lg bg-purple-600/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition cursor-pointer">🔄 Retry</button>`);
                 }
                 console.error('Send Error:', err);
             }
