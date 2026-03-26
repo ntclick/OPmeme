@@ -709,14 +709,14 @@ async def poll_pumpfun_graduates():
                             continue
                         if not c.get("complete") or not c.get("raydium_pool"):
                             continue
-                        # In seed mode: accept any graduated coin with mcap > $10k
-                        # Normal mode: skip coins > 48h old
+                        # Age filter: ALWAYS reject coins > 48h old (even seed mode)
                         ct = c.get("created_timestamp", 0)
                         if ct and ct > 1e12:
                             ct = int(ct / 1000)
-                        if not seed_mode and ct and (time.time() - ct) > 48 * 3600:
+                        if ct and (time.time() - ct) > 48 * 3600:
                             continue
                         usd_mcap = c.get("usd_market_cap", 0) or 0
+                        # Seed mode: require mcap > $10k for quality
                         if seed_mode and usd_mcap < 10_000:
                             continue
                         if db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first():
@@ -767,6 +767,11 @@ async def process_candidate_light(mint: str, dex_name: str = "Unknown", helius_t
         symbol = pf["symbol"] or "???"
         name = pf["name"] or ""
         pump_created_at = pf["created_timestamp"]
+
+        # Age filter: reject coins > 48h old
+        if pump_created_at and (now - pump_created_at) > 48 * 3600:
+            logger.debug(f"  LIGHT SKIP {symbol} — too old ({(now - pump_created_at) // 3600}h)")
+            return
 
         # DexScreener lookup (free) — ok if returns nothing
         dex_pair = await _dexscreener_lookup(mint)
@@ -1044,8 +1049,9 @@ async def lp_detector_loop(interval_seconds: int = 30):
             found = await scan_new_lps()
             if found:
                 logger.info(f"  Processed {found} candidates | Birdeye: {_birdeye_calls_today}/{MAX_BIRDEYE_CALLS_PER_DAY} used today")
-            # Poll pump.fun API for graduated coins (fallback for missed WS events)
-            await poll_pumpfun_graduates()
+            # NOTE: pump.fun API only returns old graduated coins (youngest ~400d).
+            # Real-time detection comes from WebSocket + Helius poll.
+            # poll_pumpfun_graduates() disabled — it only adds stale data.
             # Flush retry queue (coins with liq=0 on first check)
             if _pending_retry:
                 await flush_retry_queue()

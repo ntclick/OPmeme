@@ -194,80 +194,97 @@ class OpenGradientAnalyzer:
         except Exception as e:
             return {"content": None, "error": str(e)}
 
-    async def chat_completion_stream(self, messages: Any, llm_model: Optional[str] = None, max_tokens: int = 1000) -> AsyncGenerator[dict, None]:
-        """Streaming version of chat_completion — yields chunks as they arrive."""
+    async def chat_completion_stream(self, messages: Any, llm_model: Optional[str] = None, max_tokens: int = 1000, max_retries: int = 2) -> AsyncGenerator[dict, None]:
+        """Streaming version of chat_completion — yields chunks as they arrive. Retries on failure."""
         if not self._initialized:
             yield {"type": "error", "error": self._init_error}
             return
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
         model_str = llm_model if llm_model and "/" in llm_model else self.DEFAULT_MODEL
-        try:
-            current_model = self.model_map.get(model_str, og.TEE_LLM.GPT_4_1_2025_04_14)
-            stream = await self._llm_instance.chat(
-                model=current_model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.4,
-                stream=True,
-                x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
-            )
-            async for chunk in stream:
-                content = getattr(chunk.choices[0].delta, "content", "")
-                if content:
-                    yield {"type": "chunk", "content": content}
-            yield {"type": "done"}
-        except Exception as e:
-            yield {"type": "error", "error": str(e)}
+        current_model = self.model_map.get(model_str, og.TEE_LLM.GPT_4_1_2025_04_14)
 
-    async def analyze_coin(self, ticker: str, tweets_summary: list, on_chain_data: dict, scoring_result: dict, llm_model: Optional[str] = None) -> dict:
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    logger.info(f"Retry {attempt}/{max_retries} for chat_completion_stream...")
+                    await asyncio.sleep(2 * attempt)  # backoff: 2s, 4s
+                stream = await self._llm_instance.chat(
+                    model=current_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                    stream=True,
+                    x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
+                )
+                async for chunk in stream:
+                    content = getattr(chunk.choices[0].delta, "content", "")
+                    if content:
+                        yield {"type": "chunk", "content": content}
+                yield {"type": "done"}
+                return  # success — no retry needed
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"chat_completion_stream attempt {attempt + 1} failed: {e}")
+        # All retries exhausted
+        yield {"type": "error", "error": last_error}
+
+    async def analyze_coin(self, ticker: str, tweets_summary: list, on_chain_data: dict, scoring_result: dict, llm_model: Optional[str] = None, max_retries: int = 2) -> dict:
         if not self._initialized: return {"error": self._init_error}
         model_str = llm_model or self.DEFAULT_MODEL
         input_text = f"Analyze ${ticker}\nScores: {json.dumps(scoring_result)}\nData: {json.dumps(on_chain_data)}"
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": input_text}]
-        try:
-            current_model = self.model_map.get(model_str, og.TEE_LLM.GPT_4_1_2025_04_14)
-            completion = await self._llm_instance.chat(
-                model=current_model,
-                messages=messages,
-                max_tokens=2000,
-                temperature=0.1,
-                x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
-            )
-            raw_output = completion.chat_output
-            if isinstance(raw_output, dict) and "content" in raw_output:
-                raw = raw_output["content"]
-            elif hasattr(raw_output, "content"):
-                raw = raw_output.content
-            else:
-                raw = str(raw_output)
 
+        last_error = None
+        for attempt in range(max_retries + 1):
             try:
-                # Attempt to extract JSON if LLM wraps it in text
-                start = raw.find("{")
-                end = raw.rfind("}") + 1
-                ai_result = json.loads(raw[start:end])
-                # If LLM returned the OAI message object inside the stringified content
-                if "content" in ai_result and "role" in ai_result:
-                    inner_raw = ai_result["content"]
-                    try:
-                        inner_start = inner_raw.find("{")
-                        inner_end = inner_raw.rfind("}") + 1
-                        ai_result = json.loads(inner_raw[inner_start:inner_end])
-                    except:
-                        ai_result = {"verdict": inner_raw}
-            except: 
-                ai_result = {"verdict": raw}
-            
-            return {
-                "ai_result": ai_result, 
-                "tx_hash": getattr(completion, "transaction_hash", None), 
-                "used_opengradient": True,
-                "model_used": current_model
-            }
-        except Exception as e:
-            logger.error(f"Inference failed: {e}")
-            return {"error": str(e), "used_opengradient": False}
+                if attempt > 0:
+                    logger.info(f"Retry {attempt}/{max_retries} for analyze_coin...")
+                    await asyncio.sleep(2 * attempt)
+                current_model = self.model_map.get(model_str, og.TEE_LLM.GPT_4_1_2025_04_14)
+                completion = await self._llm_instance.chat(
+                    model=current_model,
+                    messages=messages,
+                    max_tokens=2000,
+                    temperature=0.1,
+                    x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL
+                )
+                raw_output = completion.chat_output
+                if isinstance(raw_output, dict) and "content" in raw_output:
+                    raw = raw_output["content"]
+                elif hasattr(raw_output, "content"):
+                    raw = raw_output.content
+                else:
+                    raw = str(raw_output)
+
+                try:
+                    start = raw.find("{")
+                    end = raw.rfind("}") + 1
+                    ai_result = json.loads(raw[start:end])
+                    if "content" in ai_result and "role" in ai_result:
+                        inner_raw = ai_result["content"]
+                        try:
+                            inner_start = inner_raw.find("{")
+                            inner_end = inner_raw.rfind("}") + 1
+                            ai_result = json.loads(inner_raw[inner_start:inner_end])
+                        except:
+                            ai_result = {"verdict": inner_raw}
+                except:
+                    ai_result = {"verdict": raw}
+
+                return {
+                    "ai_result": ai_result,
+                    "tx_hash": getattr(completion, "transaction_hash", None),
+                    "used_opengradient": True,
+                    "model_used": current_model
+                }
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"analyze_coin attempt {attempt + 1} failed: {e}")
+        # All retries exhausted
+        logger.error(f"Inference failed after {max_retries + 1} attempts: {last_error}")
+        return {"error": last_error, "used_opengradient": False}
 
     async def evaluate_monitor_coin(self, context: dict) -> dict:
         """
