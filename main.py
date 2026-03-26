@@ -126,10 +126,17 @@ async def serve_frontend():
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
-@app.get("/monitor", include_in_schema=False)
-async def monitor_page():
-    """Serve the PumpScan monitor dashboard."""
+@app.get("/memerader", include_in_schema=False)
+async def memerader_page():
+    """Serve the MemeRadar dashboard."""
     return FileResponse(str(STATIC_DIR / "monitor.html"))
+
+
+@app.get("/monitor", include_in_schema=False)
+async def monitor_redirect():
+    """Redirect old /monitor URL to /memerader."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/memerader")
 
 
 @app.get("/favicon.ico", include_in_schema=False)

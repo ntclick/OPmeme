@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CoinCheckGo - PumpScan Monitor</title>
+    <title>CoinCheckGo - MemeRadar Monitor</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
@@ -116,56 +116,65 @@
 </head>
 <body class="antialiased">
 
-<!-- ═══ Top Navigation ═══ -->
+<!-- ═══ Top Navigation (synced with index.html) ═══ -->
 <nav class="w-full border-b border-white/5 bg-black/50 backdrop-blur-md z-50 flex-shrink-0">
     <div class="max-w-full mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
-        <!-- Left: Logo + Live -->
-        <div class="flex items-center gap-3 flex-shrink-0">
+        <!-- Left: Logo + Nav links -->
+        <div class="flex items-center gap-3 md:gap-6 flex-shrink-0">
             <a href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
                 <div class="w-7 h-7 rounded bg-gradient-to-br from-primary to-emerald-600 flex items-center justify-center shadow-[0_0_15px_rgba(0,255,157,0.3)]">
                     <i data-lucide="shield" class="w-4 h-4 text-black"></i>
                 </div>
                 <span class="font-bold text-lg tracking-tight">CoinCheck<span class="text-primary">Go</span></span>
             </a>
-            <span class="text-gray-500 text-sm font-mono">/monitor</span>
-            <div class="flex items-center gap-1.5 ml-2 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+            <div class="flex items-center gap-2 md:gap-4 text-[10px] md:text-sm text-gray-400 font-medium">
+                <a href="/static/chat.html" class="flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-all font-bold whitespace-nowrap">
+                    <i data-lucide="message-square" class="w-3 h-3 md:w-3.5 md:h-3.5"></i>
+                    <span>Chat AI</span>
+                </a>
+                <a href="/memerader" class="flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-lg bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20 transition-all font-bold whitespace-nowrap">
+                    <i data-lucide="radar" class="w-3 h-3 md:w-3.5 md:h-3.5"></i>
+                    <span>MemeRadar</span>
+                </a>
+                <a href="/" class="hover:text-white transition whitespace-nowrap hidden md:inline">Home</a>
+                <div class="flex items-center gap-1 bg-white/5 px-2 md:px-2.5 py-1.5 rounded-full border border-white/10 flex-shrink-0 hidden md:flex">
+                    <i data-lucide="cpu" class="w-3 h-3 md:w-3.5 md:h-3.5 text-secondary"></i>
+                    <span class="text-gray-300 text-[10px] md:text-xs">OpenGradient</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
                 <span class="w-1.5 h-1.5 rounded-full bg-primary live-dot"></span>
                 <span class="text-[10px] font-bold text-primary tracking-wider">LIVE</span>
             </div>
         </div>
 
         <!-- Right: Stats -->
-        <div class="flex items-center gap-3 md:gap-5 text-xs font-mono overflow-x-auto no-scrollbar">
-            <div class="flex items-center gap-1.5">
-                <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
-                <span class="text-gray-500">New</span>
-                <span class="font-bold text-sky-400" id="hNew">0</span>
-            </div>
-            <div class="flex items-center gap-1.5">
-                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
-                <span class="text-gray-500">Pending</span>
-                <span class="font-bold text-cyan-400" id="hPending">0</span>
-            </div>
-            <div class="flex items-center gap-1.5">
+        <div class="flex items-center gap-2 md:gap-4 text-[10px] md:text-xs font-mono overflow-x-auto no-scrollbar">
+            <div class="flex items-center gap-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                <span class="text-gray-500">Watching</span>
+                <span class="text-gray-500 hidden md:inline">Watching</span>
                 <span class="font-bold text-blue-400" id="hWatching">0</span>
             </div>
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                <span class="text-gray-500 hidden md:inline">Pending</span>
+                <span class="font-bold text-cyan-400" id="hPending">0</span>
+            </div>
+            <div class="flex items-center gap-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>
-                <span class="text-gray-500">Degraded</span>
+                <span class="text-gray-500 hidden md:inline">Degraded</span>
                 <span class="font-bold text-yellow-400" id="hDegraded">0</span>
             </div>
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-red-400"></span>
-                <span class="text-gray-500">Removed</span>
+                <span class="text-gray-500 hidden md:inline">Removed</span>
                 <span class="font-bold text-red-400" id="hRemoved">0</span>
             </div>
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1">
                 <span class="text-gray-500">Total</span>
                 <span class="font-bold text-white" id="hTotal">0</span>
             </div>
-            <span class="text-gray-600 text-[10px] hidden md:inline" id="hLast">Last: --:-- --/--</span>
+            <span class="text-gray-600 text-[10px] hidden lg:inline" id="hLast">--:-- --/--</span>
         </div>
     </div>
 </nav>
@@ -432,47 +441,6 @@
                 </div>
                 <!-- AI Analysis result (inline, hidden when modal opens) -->
                 <div id="detAiResult" class="hidden mt-3 p-3 bg-white/[.03] border border-white/10 rounded-lg text-xs text-gray-300 leading-relaxed max-h-60 overflow-y-auto"></div>
-
-<!-- AI Chat Modal -->
-<div id="aiChatModal" class="fixed inset-0 z-[999] hidden">
-    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeAiChat()"></div>
-    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] max-w-[95vw] max-h-[85vh] flex flex-col rounded-xl border border-white/10 bg-[#0d0d10] shadow-2xl overflow-hidden">
-        <!-- Header -->
-        <div class="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-purple-500/5">
-            <div class="flex items-center gap-2">
-                <div class="w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center">
-                    <i data-lucide="brain" class="w-4 h-4 text-purple-400"></i>
-                </div>
-                <div>
-                    <div class="text-sm font-bold text-white" id="aiChatTitle">AI Trading Assistant</div>
-                    <div class="text-[10px] text-gray-500">Claude Sonnet 4.6 via OpenGradient</div>
-                </div>
-            </div>
-            <button onclick="closeAiChat()" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition">
-                <i data-lucide="x" class="w-4 h-4"></i>
-            </button>
-        </div>
-        <!-- Messages -->
-        <div id="aiChatMessages" class="flex-1 overflow-y-auto p-4 space-y-3 min-h-[300px] max-h-[55vh]"></div>
-        <!-- Input -->
-        <div class="p-3 border-t border-white/10 bg-white/[.02]">
-            <div class="flex gap-2">
-                <input id="aiChatInput" type="text" placeholder="Hỏi về coin này..."
-                    class="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-purple-500/50 focus:outline-none transition"
-                    onkeydown="if(event.key==='Enter')sendAiChat()">
-                <button onclick="sendAiChat()" class="px-4 py-2 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition">
-                    <i data-lucide="send" class="w-3.5 h-3.5"></i>
-                </button>
-            </div>
-            <div class="flex gap-2 mt-2">
-                <button onclick="sendQuick('Nên mua hay không?')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Nên mua?</button>
-                <button onclick="sendQuick('Phân tích rủi ro')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Rủi ro</button>
-                <button onclick="sendQuick('So sánh với các coin cùng loại')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">So sánh</button>
-                <button onclick="sendQuick('Điểm vào lệnh tốt?')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Entry?</button>
-            </div>
-        </div>
-    </div>
-</div>
             </div>
 
             <!-- Metrics -->
@@ -505,9 +473,47 @@
     </div>
 </div>
 
+<!-- AI Chat Modal (MUST be outside detail panel to avoid overflow:hidden clipping) -->
+<div id="aiChatModal" class="fixed inset-0 z-[999] hidden">
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeAiChat()"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] max-w-[95vw] max-h-[85vh] flex flex-col rounded-xl border border-white/10 bg-[#0d0d10] shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-purple-500/5">
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center">
+                    <i data-lucide="brain" class="w-4 h-4 text-purple-400"></i>
+                </div>
+                <div>
+                    <div class="text-sm font-bold text-white" id="aiChatTitle">AI Trading Assistant</div>
+                    <div class="text-[10px] text-gray-500">Claude Sonnet 4.6 via OpenGradient</div>
+                </div>
+            </div>
+            <button onclick="closeAiChat()" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition">
+                <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+        </div>
+        <div id="aiChatMessages" class="flex-1 overflow-y-auto p-4 space-y-3 min-h-[300px] max-h-[55vh]"></div>
+        <div class="p-3 border-t border-white/10 bg-white/[.02]">
+            <div class="flex gap-2">
+                <input id="aiChatInput" type="text" placeholder="Hỏi về coin này..."
+                    class="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-gray-500 focus:border-purple-500/50 focus:outline-none transition"
+                    onkeydown="if(event.key==='Enter')sendAiChat()">
+                <button onclick="sendAiChat()" class="px-4 py-2 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition">
+                    <i data-lucide="send" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div class="flex gap-2 mt-2">
+                <button onclick="sendQuick('Buy or skip? Give me a straight answer.')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Buy/Skip?</button>
+                <button onclick="sendQuick('What are the main risks? Rug signals?')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Risks</button>
+                <button onclick="sendQuick('Best entry point and exit targets?')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Entry/Exit</button>
+                <button onclick="sendQuick('Whale activity and smart money signals?')" class="px-2 py-1 rounded bg-white/5 text-[10px] text-gray-400 hover:bg-white/10 transition">Whales</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 /* ═══════════════════════════════════════════════════════════════════
-   PumpScan Monitor — CoinCheckGo Design System
+   MemeRadar Monitor — CoinCheckGo Design System
    ═══════════════════════════════════════════════════════════════════ */
 
 // ── State ────────────────────────────────────────────────────────
@@ -539,6 +545,23 @@ function fmtMoney(v) {
     if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
     if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'k';
     return '$' + v;
+}
+function fmtPrice(p) {
+    if (!p || p === 0) return '$0';
+    if (p >= 1) return '$' + p.toFixed(2);
+    if (p >= 0.01) return '$' + p.toFixed(4);
+    // For very small prices like 0.000454 → $0.000454
+    // Count leading zeros after decimal
+    const s = p.toFixed(20);
+    const afterDot = s.split('.')[1] || '';
+    let zeros = 0;
+    for (const c of afterDot) { if (c === '0') zeros++; else break; }
+    // Show subscript notation: $0.0₄5432
+    if (zeros >= 4) {
+        const sig = afterDot.slice(zeros, zeros + 4);
+        return `$0.0<sub class="text-[8px] text-gray-500">${zeros}</sub>${sig}`;
+    }
+    return '$' + p.toFixed(zeros + 4);
 }
 function fmtAgo(ts) {
     const s = getNow() - ts;
@@ -682,24 +705,22 @@ function renderAll() {
 }
 
 function renderHeader() {
-    const n = allCoins.filter(c => c.status === 'new').length;
-    const p = allCoins.filter(c => c.status === 'pending').length;
+    const p = allCoins.filter(c => c.status === 'pending' || c.status === 'new').length;
     const a = allCoins.filter(c => c.status === 'active').length;
     const d = allCoins.filter(c => c.status === 'degraded').length;
     const r = allCoins.filter(c => c.status === 'removed').length;
-    document.getElementById('hNew').textContent = n;
     document.getElementById('hPending').textContent = p;
     document.getElementById('hWatching').textContent = a;
     document.getElementById('hDegraded').textContent = d;
     document.getElementById('hRemoved').textContent = r;
     document.getElementById('hTotal').textContent = allCoins.length;
-    document.getElementById('hLast').textContent = 'Last: ' + fmt(getNow());
+    document.getElementById('hLast').textContent = fmt(getNow());
 }
 
 function renderSidebarCounts() {
     document.getElementById('fAll').textContent = allCoins.length;
     document.getElementById('fNew').textContent = allCoins.filter(c => c.status === 'new').length;
-    document.getElementById('fPending').textContent = allCoins.filter(c => c.status === 'pending').length;
+    document.getElementById('fPending').textContent = allCoins.filter(c => c.status === 'pending' || c.status === 'new').length;
     document.getElementById('fActive').textContent = allCoins.filter(c => c.status === 'active').length;
     document.getElementById('fDegraded').textContent = allCoins.filter(c => c.status === 'degraded').length;
     document.getElementById('fRemoved').textContent = allCoins.filter(c => c.status === 'removed').length;
@@ -1082,7 +1103,7 @@ function openAiChat(mint) {
     document.getElementById('aiChatInput').value = '';
     lucide.createIcons();
     // Auto-send initial evaluation
-    sendAiMessage(`Phân tích nhanh ${coin.symbol} (${mint}). MCap: ${fmtMoney(coin.mcap)}, Liq: ${fmtMoney(coin.liq)}, Holders: ${coin.holders}, Score: ${coin.score}/100, Filter: ${Object.values(coin.filter).filter(Boolean).length}/5 pass, DEX: ${coin.dex}, Status: ${coin.status}. Đánh giá ngắn gọn và cho lời khuyên giao dịch.`);
+    sendAiMessage(`Quick analysis: ${coin.symbol} (${mint}). MCap: ${fmtMoney(coin.mcap)}, Liq: ${fmtMoney(coin.liq)}, Holders: ${coin.holders}, Score: ${coin.score}/100, Filter: ${Object.values(coin.filter).filter(Boolean).length}/5 pass, DEX: ${coin.dex}, Status: ${coin.status}. Give me your take — entry or skip? Key risks?`);
     setTimeout(() => document.getElementById('aiChatInput').focus(), 200);
 }
 
@@ -1245,7 +1266,7 @@ async function loadTrending() {
 
             const pcColor = v => v > 0 ? 'text-primary' : v < 0 ? 'text-red-400' : 'text-gray-500';
             const pcFmt = v => (v > 0 ? '+' : '') + v.toFixed(1) + '%';
-            const priceFmt = price < 0.001 ? '$' + price.toExponential(2) : price < 1 ? '$' + price.toFixed(4) : '$' + price.toFixed(2);
+            const priceFmt = fmtPrice(price);
 
             const tr = document.createElement('tr');
             tr.className = 'hover:bg-white/[.02] cursor-pointer transition-colors border-b border-white/[.03]';
@@ -1391,18 +1412,18 @@ function openAiChatTrending(mint) {
     document.getElementById('aiChatInput').value = '';
     lucide.createIcons();
 
-    let prompt = `Phân tích nhanh ${d.symbol} (${mint}).`;
+    let prompt = `Quick analysis: ${d.symbol} (${mint}).`;
     prompt += ` Price: $${d.price}, MCap: ${fmtMoney(d.mcap)}, Liq: ${fmtMoney(d.liq)},`;
-    prompt += ` Vol24h: ${fmtMoney(d.vol24h)}, Buys/Sells: ${d.buys}/${d.sells}.`;
+    prompt += ` Vol24h: ${fmtMoney(d.vol24h)}, Buys/Sells 24h: ${d.buys}/${d.sells}.`;
     const pc = d.priceChange || {};
     if (pc.m5 != null) prompt += ` 5m: ${pc.m5>0?'+':''}${pc.m5.toFixed(1)}%, 1h: ${(pc.h1||0)>0?'+':''}${(pc.h1||0).toFixed(1)}%, 24h: ${(pc.h24||0)>0?'+':''}${(pc.h24||0).toFixed(1)}%.`;
     if (h) {
         prompt += ` Mint authority: ${h.is_mint_renounced ? 'renounced' : 'ACTIVE'}.`;
         prompt += ` Freeze: ${h.freeze_authority ? 'ACTIVE' : 'none'}.`;
-        if (h.top10_pct != null) prompt += ` Top10: ${h.top10_pct.toFixed(1)}%.`;
+        if (h.top10_pct != null) prompt += ` Top10 holders: ${h.top10_pct.toFixed(1)}%.`;
         if (h.largest_holder_pct != null) prompt += ` Largest holder: ${h.largest_holder_pct.toFixed(1)}%.`;
     }
-    prompt += ` Source: DexScreener Trending. Đánh giá ngắn gọn và cho lời khuyên giao dịch.`;
+    prompt += ` Source: DexScreener Trending (boosted). Give me your take — ape in, wait, or skip? Key risks and catalysts?`;
 
     sendAiMessage(prompt);
     setTimeout(() => document.getElementById('aiChatInput').focus(), 200);

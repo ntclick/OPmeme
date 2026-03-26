@@ -477,8 +477,8 @@ async def process_candidate(mint: str, dex_name: str = "Unknown", helius_ts: int
         t0 = True
         pump_created_at = pf["created_timestamp"]
 
-        # Reject old coins — only track coins created within last 6 hours
-        if pump_created_at and (now - pump_created_at) > 6 * 3600:
+        # Reject very old coins (>48h)
+        if pump_created_at and (now - pump_created_at) > 48 * 3600:
             logger.debug(f"  T0 SKIP {symbol} — too old ({(now - pump_created_at) // 3600}h)")
             return
 
@@ -663,13 +663,16 @@ def _save_coin(db, mint, symbol, name, dex_name, status,
 # Only migrate events (graduated coins) are tracked via process_candidate_light().
 
 
+_initial_seed_done = False
+
+
 async def poll_pumpfun_graduates():
     """
-    Fallback: poll pump.fun API for recently graduated coins.
-    Uses /coins?sort=last_trade_timestamp which returns mix of graduated + non-graduated.
-    We filter for complete=True + raydium_pool.
-    Called every 30s from lp_detector_loop.
+    Fallback: poll pump.fun API for graduated coins.
+    First run (DB empty): seed with top graduated coins (no age filter, max 15).
+    Subsequent runs: only add coins < 48h old.
     """
+    global _initial_seed_done
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             headers = {}
@@ -677,10 +680,16 @@ async def poll_pumpfun_graduates():
                 headers["x-api-key"] = PUMPFUN_API_KEY
 
             count = 0
+            max_add = 15  # limit per poll cycle
             db = SessionLocal()
             try:
-                # Fetch 2 pages of recently active coins — filter for graduated
+                # Check if DB is empty → seed mode (no age filter)
+                existing_count = db.query(WatchedCoin).count()
+                seed_mode = not _initial_seed_done and existing_count < 5
+
                 for offset in [0, 50]:
+                    if count >= max_add:
+                        break
                     resp = await client.get(
                         f"{PUMPFUN_API}/coins?offset={offset}&limit=50"
                         f"&sort=last_trade_timestamp&order=DESC&includeNsfw=false",
@@ -693,32 +702,38 @@ async def poll_pumpfun_graduates():
                         break
 
                     for c in coins:
+                        if count >= max_add:
+                            break
                         mint = c.get("mint")
                         if not mint:
                             continue
-                        # Only graduated coins (complete + raydium_pool)
                         if not c.get("complete") or not c.get("raydium_pool"):
                             continue
-                        # Skip old coins (>6h since creation)
+                        # In seed mode: accept any graduated coin with mcap > $10k
+                        # Normal mode: skip coins > 48h old
                         ct = c.get("created_timestamp", 0)
                         if ct and ct > 1e12:
                             ct = int(ct / 1000)
-                        if ct and (time.time() - ct) > 6 * 3600:
+                        if not seed_mode and ct and (time.time() - ct) > 48 * 3600:
                             continue
-                        # Skip if already in DB
+                        usd_mcap = c.get("usd_market_cap", 0) or 0
+                        if seed_mode and usd_mcap < 10_000:
+                            continue
                         if db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first():
                             continue
-                        # Light scan (free APIs only)
                         await process_candidate_light(mint, "Raydium")
                         count += 1
                         await asyncio.sleep(0.5)
 
                     await asyncio.sleep(0.3)
+
+                if seed_mode and count > 0:
+                    _initial_seed_done = True
             finally:
                 db.close()
 
             if count:
-                logger.info(f"  pump.fun poll: {count} new graduates found")
+                logger.info(f"  pump.fun poll: {count} {'seeded' if seed_mode else 'new'} graduates")
             return count
         except Exception as e:
             logger.debug(f"poll_pumpfun_graduates error: {e}")
@@ -752,11 +767,6 @@ async def process_candidate_light(mint: str, dex_name: str = "Unknown", helius_t
         symbol = pf["symbol"] or "???"
         name = pf["name"] or ""
         pump_created_at = pf["created_timestamp"]
-
-        # Reject old coins — only track coins created within last 6 hours
-        if pump_created_at and (now - pump_created_at) > 6 * 3600:
-            logger.debug(f"  LIGHT SKIP {symbol} — too old ({(now - pump_created_at) // 3600}h)")
-            return
 
         # DexScreener lookup (free) — ok if returns nothing
         dex_pair = await _dexscreener_lookup(mint)
