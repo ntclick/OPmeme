@@ -56,7 +56,8 @@ MODELS = {
 
 # ── Binance Public API (no auth needed) ─────────────────────────────────────
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_BASE = os.getenv("BINANCE_API_BASE", "https://data-api.binance.vision")
+BINANCE_KLINES_URL = f"{BINANCE_BASE}/api/v3/klines"
 SYMBOL = "SUIUSDT"
 
 # Binance valid intervals — map unsupported ones to nearest valid
@@ -115,7 +116,7 @@ async def fetch_current_price() -> dict:
     """Fetch current SUI/USDT ticker."""
     async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
         resp = await client.get(
-            "https://api.binance.com/api/v3/ticker/24hr",
+            f"{BINANCE_BASE}/api/v3/ticker/24hr",
             params={"symbol": SYMBOL},
         )
         resp.raise_for_status()
