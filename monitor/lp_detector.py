@@ -70,6 +70,7 @@ HELIUS_SOURCE_MAP = {
 DEXSCREENER_DEX_MAP = {
     "raydium": "Raydium", "orca": "Orca", "meteora": "Meteora",
     "fluxbeam": "FluxBeam", "lifinity": "Lifinity",
+    "pumpswap": "PumpSwap",
 }
 
 SKIP_MINTS = {
@@ -141,7 +142,7 @@ async def _pumpfun_lookup(mint: str) -> dict | None:
             complete = d.get("complete", False)
             raydium_pool = d.get("raydium_pool")
             return {
-                "is_pumpfun": complete and bool(raydium_pool),
+                "is_pumpfun": complete,  # graduated = from pump.fun (may be on Raydium or PumpSwap)
                 "complete": complete,
                 "created_timestamp": int(created_ts / 1000) if created_ts and created_ts > 1e12 else created_ts,
                 "creator": d.get("creator"),
@@ -948,6 +949,70 @@ async def run_deep_scan(mint: str) -> dict:
         db.close()
 
 
+async def discover_via_dexscreener(max_add: int = 10):
+    """
+    Discover new pump.fun graduated coins via DexScreener search.
+    No Helius needed — uses free DexScreener + pump.fun API.
+    Searches for recent Solana meme pairs, verifies pump.fun origin.
+    """
+    queries = ["pumpswap", "graduated pump", "raydium new meme", "solana pump raydium"]
+    all_mints: dict[str, dict] = {}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        for q in queries:
+            try:
+                resp = await client.get(f"https://api.dexscreener.com/latest/dex/search?q={q}")
+                if resp.status_code != 200:
+                    continue
+                pairs = resp.json().get("pairs", [])
+                for p in pairs:
+                    if p.get("chainId") != "solana":
+                        continue
+                    mint = p.get("baseToken", {}).get("address", "")
+                    if not mint or mint in all_mints or mint in SKIP_MINTS:
+                        continue
+                    liq = (p.get("liquidity") or {}).get("usd", 0)
+                    mcap = p.get("fdv", 0) or 0
+                    if liq < 1000 or mcap < 5000:
+                        continue
+                    age_h = (time.time() * 1000 - (p.get("pairCreatedAt", 0))) / 3600000
+                    all_mints[mint] = {"age_h": age_h, "dex": p.get("dexId", "Unknown")}
+            except Exception:
+                pass
+            await asyncio.sleep(0.3)
+
+    if not all_mints:
+        return 0
+
+    # Sort by newest first
+    sorted_mints = sorted(all_mints.items(), key=lambda x: x[1]["age_h"])
+
+    count = 0
+    db = SessionLocal()
+    try:
+        for mint, info in sorted_mints:
+            if count >= max_add:
+                break
+            # Skip if already in DB
+            if db.query(WatchedCoin).filter(WatchedCoin.mint == mint).first():
+                continue
+            # Verify pump.fun origin (free API)
+            pf = await _pumpfun_lookup(mint)
+            if not pf or not pf.get("is_pumpfun"):
+                continue
+            # Add via light scan
+            dex_name = DEXSCREENER_DEX_MAP.get(info["dex"], info["dex"].title() if info["dex"] else "Unknown")
+            await process_candidate_light(mint, dex_name)
+            count += 1
+            await asyncio.sleep(0.5)
+    finally:
+        db.close()
+
+    if count:
+        logger.info(f"  DexScreener discovery: {count} new pump.fun coins found")
+    return count
+
+
 async def flush_retry_queue():
     """Process coins that had liq=0 on first check (DexScreener not indexed yet)."""
     now = int(time.time())
@@ -1030,6 +1095,8 @@ async def lp_detector_loop(interval_seconds: int = 30):
                 logger.info(f"  Processed {found} candidates | Birdeye: {_birdeye_calls_today}/{MAX_BIRDEYE_CALLS_PER_DAY} used today")
             # Poll pump.fun API for top graduated coins
             await poll_pumpfun_graduates()
+            # Discover new pump.fun coins via DexScreener (no Helius needed)
+            await discover_via_dexscreener()
             # Flush retry queue (coins with liq=0 on first check)
             if _pending_retry:
                 await flush_retry_queue()
