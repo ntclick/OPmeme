@@ -66,7 +66,7 @@ _INTERVAL_MAP = {"3h": "4h", "6h": "4h", "12h": "8h"}
 async def fetch_ohlc(interval: str, limit: int) -> list[dict]:
     """Fetch OHLC candles from Binance for SUI/USDT."""
     interval = _INTERVAL_MAP.get(interval, interval)
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, proxy=None) as client:
         resp = await client.get(
             BINANCE_KLINES_URL,
             params={"symbol": SYMBOL, "interval": interval, "limit": limit + 5},
@@ -90,7 +90,7 @@ async def fetch_ohlc(interval: str, limit: int) -> list[dict]:
 async def fetch_price_history(interval: str = "15m", limit: int = 200) -> list[dict]:
     """Fetch candle history for chart display."""
     interval = _INTERVAL_MAP.get(interval, interval)
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, proxy=None) as client:
         resp = await client.get(
             BINANCE_KLINES_URL,
             params={"symbol": SYMBOL, "interval": interval, "limit": limit},
@@ -113,7 +113,7 @@ async def fetch_price_history(interval: str = "15m", limit: int = 200) -> list[d
 
 async def fetch_current_price() -> dict:
     """Fetch current SUI/USDT ticker."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, proxy=None) as client:
         resp = await client.get(
             "https://api.binance.com/api/v3/ticker/24hr",
             params={"symbol": SYMBOL},
