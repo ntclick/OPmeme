@@ -1846,3 +1846,113 @@ async def get_token_quick_info(mint: str):
 
     _quick_info_cache[mint] = (_time.time(), result)
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SUI/USDT Spot Forecasting (OpenGradient ML Models)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from analysis.forecast import (
+    fetch_current_price,
+    fetch_price_history,
+    fetch_ohlc,
+    run_inference,
+    record_prediction,
+    get_prediction_history,
+    MODELS,
+)
+
+
+@router.get("/forecast/price")
+async def forecast_price(interval: str = "15m", limit: int = 200):
+    """Current SUI/USDT price + chart candle data."""
+    try:
+        ticker, history = await asyncio.gather(
+            fetch_current_price(),
+            fetch_price_history(interval=interval, limit=limit),
+        )
+        return {"ticker": ticker, "candles": history, "interval": interval}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance API error: {e}")
+
+
+@router.get("/forecast/models")
+async def forecast_models():
+    """List available forecast models and their specs."""
+    return {
+        key: {
+            "name": m["name"],
+            "horizon": m["horizon"],
+            "candles": m["candles"],
+            "interval": m["interval"],
+            "accuracy": m["accuracy"],
+            "mse": m["mse"],
+            "correlation": m["correlation"],
+            "has_cid": bool(m["cid"]),
+        }
+        for key, m in MODELS.items()
+    }
+
+
+@router.post("/forecast/predict/{model_key}")
+async def forecast_predict(model_key: str):
+    """Run spot forecast inference for SUI/USDT."""
+    if model_key not in MODELS:
+        raise HTTPException(status_code=400, detail=f"Model must be one of: {list(MODELS.keys())}")
+
+    # Fix: Binance doesn't support 3h interval, force 4h
+    if MODELS[model_key].get("binance_interval") == "3h":
+        MODELS[model_key]["binance_interval"] = "4h"
+
+    result = await run_inference(model_key)
+    if "error" in result:
+        raise HTTPException(status_code=502, detail=result["error"])
+
+    record_prediction(result)
+    return result
+
+
+@router.get("/forecast/history")
+async def forecast_history():
+    """Get recent prediction history."""
+    return {"predictions": get_prediction_history()}
+
+
+@router.post("/forecast/interpret")
+async def forecast_interpret(request: dict):
+    """Stream AI interpretation of dual SUI/USDT predictions."""
+    body = request or {}
+    pred30 = body.get("pred30")
+    pred6h = body.get("pred6h")
+
+    if not pred30 and not pred6h:
+        raise HTTPException(status_code=400, detail="No prediction data provided")
+
+    # Build prompt
+    lines = ["Briefly interpret these SUI/USDT ML forecast results for a crypto trader (2-3 sentences, Vietnamese if possible):"]
+    if pred30:
+        lines.append(f"- 30min model: {pred30.get('direction')} {pred30.get('predicted_return', 0):+.3f}% → ${pred30.get('predicted_price', 0):.4f} (accuracy {pred30.get('confidence', 53)}%)")
+    if pred6h:
+        lines.append(f"- 6h model: {pred6h.get('direction')} {pred6h.get('predicted_return', 0):+.3f}% → ${pred6h.get('predicted_price', 0):.4f} (accuracy {pred6h.get('confidence', 53)}%)")
+
+    current = (pred30 or pred6h).get("current_price", 0)
+    lines.append(f"- Current price: ${current:.4f}")
+    lines.append("Focus on: model agreement, signal strength, risk, and whether this is actionable. Be concise and direct.")
+
+    prompt = "\n".join(lines)
+
+    async def event_gen():
+        try:
+            async for chunk in opengradient_analyzer.chat_completion_stream(
+                messages=[{"role": "user", "content": prompt}],
+                llm_model="anthropic/claude-haiku-4-5",
+                max_tokens=300,
+            ):
+                yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+

@@ -139,6 +139,12 @@ async def monitor_redirect():
     return RedirectResponse("/memerader")
 
 
+@app.get("/forecast", include_in_schema=False)
+async def forecast_page():
+    """Serve the SUI/USDT Spot Forecast dashboard."""
+    return FileResponse(str(STATIC_DIR / "forecast.html"))
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     """Serve favicon to avoid 404 noise in browser console."""
