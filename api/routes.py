@@ -1904,8 +1904,12 @@ async def forecast_predict(model_key: str):
     if MODELS[model_key].get("binance_interval") == "3h":
         MODELS[model_key]["binance_interval"] = "4h"
 
-    result = await run_inference(model_key)
-    if "error" in result:
+    try:
+        result = await run_inference(model_key)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    if isinstance(result, dict) and "error" in result:
         raise HTTPException(status_code=502, detail=result["error"])
 
     record_prediction(result)

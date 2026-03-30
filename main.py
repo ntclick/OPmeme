@@ -141,8 +141,17 @@ async def monitor_redirect():
 
 @app.get("/forecast", include_in_schema=False)
 async def forecast_page():
-    """Serve the SUI/USDT Spot Forecast dashboard."""
-    return FileResponse(str(STATIC_DIR / "forecast.html"))
+    """Forecast page — under maintenance."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(
+        '<html><head><title>Forecast - Maintenance</title>'
+        '<style>body{background:#050505;color:#fff;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}'
+        '.box{text-align:center;padding:40px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(17,17,17,.7)}'
+        'h1{color:#4DA2FF;margin-bottom:8px}p{color:#888;margin:4px 0}a{color:#00ff9d;text-decoration:none}</style></head>'
+        '<body><div class="box"><h1>SUI/USDT Spot Forecast</h1>'
+        '<p>On-chain ML inference is under maintenance.</p>'
+        '<p style="margin-top:16px"><a href="/">Back to CoinCheckGo</a></p></div></body></html>'
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)

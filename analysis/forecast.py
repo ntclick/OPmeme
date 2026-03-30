@@ -181,27 +181,30 @@ def _get_og_client():
 
 
 def _parse_workflow_output(raw) -> float:
-    """Parse predicted_return from workflow contract result.
+    """Parse predicted_return from workflow contract result."""
+    logger.info(f"Parsing output: type={type(raw).__name__}, value={raw}")
 
-    raw format: ModelOutput with numbers dict containing numpy arrays,
-    e.g. {'Y': array([[-0.00123]])} or similar fixed-point encoding.
-    """
-    # ModelOutput has .numbers dict
+    # Format 1: ModelOutput with .numbers dict (numpy arrays from SDK)
     if hasattr(raw, 'numbers') and raw.numbers:
         for key, val in raw.numbers.items():
             import numpy as np
+            logger.info(f"  numbers['{key}']: type={type(val).__name__}, val={val}")
             if isinstance(val, np.ndarray):
                 return float(val.flat[0])
             return float(val)
 
-    # Fallback: try treating raw as tuple (legacy format)
-    if isinstance(raw, (list, tuple)) and len(raw) > 0:
-        first = raw[0]
-        if isinstance(first, (list, tuple)) and len(first) > 0:
-            name, values, shape = first[0] if isinstance(first[0], tuple) else (None, first, None)
-            if values and isinstance(values, (list, tuple)):
-                val, decimals = values[0] if isinstance(values[0], tuple) else (values[0], 0)
-                return float(val) / (10 ** decimals) if decimals else float(val)
+    # Format 2: Raw tuple from minimal ABI
+    # e.g. [('destandardized_prediction', [1010655425488948822021484375], [30], [1])]
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 3:
+                name, values, decimals_list = item[0], item[1], item[2]
+                if values and isinstance(values, (list, tuple)) and len(values) > 0:
+                    val = values[0]
+                    dec = decimals_list[0] if decimals_list and len(decimals_list) > 0 else 0
+                    result = float(val) / (10 ** dec) if dec else float(val)
+                    logger.info(f"  Parsed '{name}': val={val}, decimals={dec}, result={result}")
+                    return result
 
     raise ValueError(f"Cannot parse workflow output: {type(raw)} = {raw}")
 
@@ -252,64 +255,83 @@ async def run_inference(model_key: str) -> dict:
         }
 
     client = _get_og_client()
+    if not client:
+        raise ValueError("OpenGradient client not initialized — check OG_PRIVATE_KEY")
 
-    # Step 2A: Direct infer() with CURRENT candle data (preferred — fresh prediction)
-    if client and model["cid"]:
-        try:
-            import opengradient as og
-            input_key = model.get("input_key", "open_high_low_close")
-            logger.info(f"[{model_key}] Running infer() with CID={model['cid'][:20]}...")
-            result = await asyncio.to_thread(
-                client.infer,
-                model_cid=model["cid"],
-                inference_mode=og.InferenceMode.VANILLA,
-                model_input={input_key: ohlc_input},
-            )
-            output = result.model_output
-            # Parse output — key may be "destandardized_prediction" or similar
-            predicted_return = None
-            if hasattr(output, 'numbers') and output.numbers:
-                for key, val in output.numbers.items():
-                    import numpy as np
-                    predicted_return = float(val.flat[0]) if hasattr(val, 'flat') else float(val)
-                    logger.info(f"[{model_key}] Output key='{key}', value={predicted_return}")
-                    break
-            elif isinstance(output, dict):
-                for key, val in output.items():
-                    predicted_return = float(val.flat[0]) if hasattr(val, 'flat') else float(val)
-                    logger.info(f"[{model_key}] Output key='{key}', value={predicted_return}")
-                    break
-            if predicted_return is None:
-                raise ValueError(f"Cannot parse model output: {output}")
-            logger.info(f"[{model_key}] Inference OK! tx={result.transaction_hash[:16]}...")
-            return _build_result(predicted_return, source="infer", tx_hash=result.transaction_hash)
-        except Exception as e:
-            logger.warning(f"[{model_key}] infer() failed: {e}")
-
-    # Step 2B: Read workflow contract as fallback (stale data but on-chain)
+    # On-chain inference via workflow contract — triggers fresh run, waits for result
     contract_addr = WORKFLOW_CONTRACTS.get(model_key)
-    if client and contract_addr:
-        try:
-            logger.info(f"[{model_key}] Fallback: reading workflow contract {contract_addr[:12]}...")
-            raw = await asyncio.to_thread(client.read_workflow_result, contract_addr)
-            predicted_return = _parse_workflow_output(raw)
-            logger.info(f"[{model_key}] Workflow result: return={predicted_return:.6f}")
-            return _build_result(predicted_return, source="workflow")
-        except Exception as e:
-            logger.warning(f"[{model_key}] read_workflow_result failed: {e}")
+    if not contract_addr:
+        raise ValueError(f"No workflow contract for model {model_key}")
 
-    # Step 3: Simulation fallback
-    logger.info(f"[{model_key}] Using simulation mode")
-    returns = []
-    for i in range(1, len(candles)):
-        r = (candles[i]["close"] - candles[i - 1]["close"]) / candles[i - 1]["close"]
-        returns.append(r)
-    if returns:
-        weights = list(range(1, len(returns) + 1))
-        predicted_return = sum(r * w for r, w in zip(returns, weights)) / sum(weights) * 0.5
-    else:
-        predicted_return = 0.0
-    return _build_result(predicted_return, source="simulation")
+    logger.info(f"[{model_key}] Running workflow {contract_addr[:12]}... (waiting for on-chain result)")
+    try:
+        raw = await asyncio.to_thread(_run_workflow_fixed_gas, client, contract_addr)
+        predicted_return = _parse_workflow_output(raw)
+        logger.info(f"[{model_key}] Workflow result: return={predicted_return:.6f}")
+        return _build_result(predicted_return, source="workflow")
+    except Exception as e:
+        logger.error(f"[{model_key}] FAILED: {type(e).__name__}: {e}")
+        raise
+
+
+def _run_workflow_fixed_gas(client, contract_address: str):
+    """run_workflow with gas limit fixed to fit block gas limit (10M)."""
+    from web3 import Web3
+
+    # Approach 1: SDK official method
+    try:
+        logger.info("Trying SDK run_workflow()...")
+        result = client.run_workflow(contract_address)
+        logger.info(f"SDK run_workflow OK: {result}")
+        return result
+    except Exception as e:
+        logger.warning(f"SDK run_workflow failed: {e}")
+
+    # Approach 2: Manual tx with correct gas + minimal ABI
+    MINIMAL_ABI = [
+        {"inputs": [], "name": "run", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+        {"inputs": [], "name": "getInferenceResult", "outputs": [
+            {"components": [
+                {"name": "name", "type": "string"},
+                {"name": "values", "type": "int256[]"},
+                {"name": "decimals", "type": "uint8[]"},
+                {"name": "shape", "type": "uint256[]"},
+            ], "internalType": "struct ModelOutput[]", "name": "", "type": "tuple[]"}
+        ], "stateMutability": "view", "type": "function"},
+    ]
+
+    contract = client._blockchain.eth.contract(
+        address=Web3.to_checksum_address(contract_address),
+        abi=MINIMAL_ABI,
+    )
+    nonce = client._blockchain.eth.get_transaction_count(client._wallet_account.address, "pending")
+    run_fn = contract.functions.run()
+
+    try:
+        estimated = run_fn.estimate_gas({"from": client._wallet_account.address})
+        gas = min(int(estimated * 1.5), 9_000_000)
+    except Exception:
+        gas = 9_000_000
+
+    tx = run_fn.build_transaction({
+        "from": client._wallet_account.address,
+        "nonce": nonce,
+        "gas": gas,
+        "gasPrice": client._blockchain.eth.gas_price,
+        "chainId": client._blockchain.eth.chain_id,
+    })
+    signed = client._wallet_account.sign_transaction(tx)
+    tx_hash = client._blockchain.eth.send_raw_transaction(signed.raw_transaction)
+    logger.info(f"Workflow tx sent: {tx_hash.hex()[:16]}... gas={gas}")
+    receipt = client._blockchain.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+    logger.info(f"Workflow tx mined! block={receipt['blockNumber']} status={receipt['status']}")
+
+    if receipt["status"] == 0:
+        raise RuntimeError("Workflow tx reverted")
+
+    raw = contract.functions.getInferenceResult().call()
+    logger.info(f"Raw getInferenceResult: {raw}")
+    return raw
 
 
 # ── Prediction History (in-memory ring buffer) ─────────────────────────────
