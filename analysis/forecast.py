@@ -157,13 +157,16 @@ def _get_og_client():
             logger.warning("OG_PRIVATE_KEY not set — on-chain inference disabled")
             return None
 
-        # Proxy bypass Cloudflare IP block on ogevmdevnet.opengradient.ai
-        proxy = "http://uzkijfqe:1h8tfoyq41mt@31.59.20.176:6754/"
-        os.environ["HTTPS_PROXY"] = proxy
-        os.environ["HTTP_PROXY"]  = proxy
-        os.environ["https_proxy"] = proxy
-        os.environ["http_proxy"]  = proxy
-        logger.info(f"Proxy set: {proxy[:30]}...")
+        # Proxy bypass Cloudflare IP block — only needed locally, not on Railway
+        if not os.getenv("RAILWAY_ENVIRONMENT"):
+            proxy = "http://uzkijfqe:1h8tfoyq41mt@31.59.20.176:6754/"
+            os.environ["HTTPS_PROXY"] = proxy
+            os.environ["HTTP_PROXY"]  = proxy
+            os.environ["https_proxy"] = proxy
+            os.environ["http_proxy"]  = proxy
+            logger.info(f"Proxy set: {proxy[:30]}...")
+        else:
+            logger.info("Railway detected — skipping proxy (DNS fix in entrypoint.sh)")
 
         os.environ["OG_PRIVATE_KEY"] = pk
         _og_client = og.Alpha(

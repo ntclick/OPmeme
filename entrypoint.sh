@@ -5,6 +5,7 @@ set -e
 # Explicitly map TEE gateway and dependency hostnames to bypass DNS resolution issues
 echo "13.59.207.188 llm.opengradient.ai" >> /etc/hosts
 echo "3.14.94.135 ogevmdevnet.opengradient.ai" >> /etc/hosts
+echo "3.14.94.135 eth-devnet.opengradient.ai" >> /etc/hosts
 echo "104.18.44.153 sepolia.base.org" >> /etc/hosts
 
 echo "✅ DNS entries injected into /etc/hosts"
