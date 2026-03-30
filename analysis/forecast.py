@@ -253,19 +253,7 @@ async def run_inference(model_key: str) -> dict:
 
     client = _get_og_client()
 
-    # Step 2A: Read from workflow contract (no transaction needed)
-    contract_addr = WORKFLOW_CONTRACTS.get(model_key)
-    if client and contract_addr:
-        try:
-            logger.info(f"[{model_key}] Reading workflow contract {contract_addr[:12]}...")
-            raw = await asyncio.to_thread(client.read_workflow_result, contract_addr)
-            predicted_return = _parse_workflow_output(raw)
-            logger.info(f"[{model_key}] Workflow result: return={predicted_return:.6f}")
-            return _build_result(predicted_return, source="workflow")
-        except Exception as e:
-            logger.warning(f"[{model_key}] read_workflow_result failed: {e}")
-
-    # Step 2B: Direct infer() (sends transaction — may fail due to TLS)
+    # Step 2A: Direct infer() with CURRENT candle data (preferred — fresh prediction)
     if client and model["cid"]:
         try:
             import opengradient as og
@@ -297,6 +285,18 @@ async def run_inference(model_key: str) -> dict:
             return _build_result(predicted_return, source="infer", tx_hash=result.transaction_hash)
         except Exception as e:
             logger.warning(f"[{model_key}] infer() failed: {e}")
+
+    # Step 2B: Read workflow contract as fallback (stale data but on-chain)
+    contract_addr = WORKFLOW_CONTRACTS.get(model_key)
+    if client and contract_addr:
+        try:
+            logger.info(f"[{model_key}] Fallback: reading workflow contract {contract_addr[:12]}...")
+            raw = await asyncio.to_thread(client.read_workflow_result, contract_addr)
+            predicted_return = _parse_workflow_output(raw)
+            logger.info(f"[{model_key}] Workflow result: return={predicted_return:.6f}")
+            return _build_result(predicted_return, source="workflow")
+        except Exception as e:
+            logger.warning(f"[{model_key}] read_workflow_result failed: {e}")
 
     # Step 3: Simulation fallback
     logger.info(f"[{model_key}] Using simulation mode")
