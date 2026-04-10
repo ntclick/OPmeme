@@ -159,26 +159,13 @@ class OpenGradientAnalyzer:
                 else:
                     raise
             
-            # --- MANDATORY: ENSURE PERMIT2 APPROVAL ---
-            # As requested by user: enhance logging and fail-hard on approval issues.
-            print("🛡️ Ensuring Permit2 OPG approval (5.0 OPG)...")
+            # --- PERMIT2 APPROVAL (non-blocking) ---
             try:
-                # Use a larger amount (5.0 OPG) to ensure longevity.
-                approval = self._llm_instance.ensure_opg_approval(min_allowance=5.0)
-                # approval is typically an OPGApprovalResponse with allowance_before, allowance_after, tx_hash
-                logger.info(f"✅ Permit2 status: before={getattr(approval, 'allowance_before', 'N/A')}, after={getattr(approval, 'allowance_after', 'N/A')}, tx={getattr(approval, 'tx_hash', 'None')}")
-                if getattr(approval, 'tx_hash', None):
-                    print(f"🚀 Approval transaction sent: {approval.tx_hash}")
-                    print("⏳ Waiting 60s for server-side indexing...")
-                    import time
-                    time.sleep(60)
-                else:
-                    print("✅ Permit2 allowance already sufficient.")
+                approval = self._llm_instance.ensure_opg_approval(min_allowance=0.1)
+                logger.info(f"Permit2 OK: before={getattr(approval, 'allowance_before', 'N/A')}, after={getattr(approval, 'allowance_after', 'N/A')}")
             except Exception as e:
-                logger.error(f"❌ CRITICAL: Permit2 approval failed: {e}")
-                self._init_error = f"Permit2 approval failed: {e}"
-                # Return early without setting _initialized = True
-                return
+                # Don't block init — approval can be retried on first chat call
+                logger.warning(f"Permit2 approval skipped: {e}")
 
             # Model mapping — built dynamically to avoid AttributeError on SDK upgrades
             _candidates = {
