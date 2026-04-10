@@ -910,10 +910,10 @@
                 document.getElementById('dualResults').classList.remove('hidden');
 
                 if (pred30) fillResultCard('30min', pred30);
-                else fillResultCardError('30min', resp30.reason?.message || 'Failed');
+                else fillResultCardError('30min', '30min model failed');
 
                 if (pred6h) fillResultCard('6h', pred6h);
-                else fillResultCardError('6h', resp6h.reason?.message || 'Failed');
+                else fillResultCardError('6h', '6h model failed');
 
                 // Draw both prediction lines on chart
                 drawDualPredictions(pred30, pred6h);

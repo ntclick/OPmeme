@@ -25,6 +25,61 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+# ── Patch Alpha.infer(): SDK 0.9.9 raises when InferenceResult event is missing
+#    instead of falling back to node API. We add that fallback. ──
+def _patch_alpha_infer():
+    try:
+        from opengradient.client.alpha import Alpha, PRECOMPILE_CONTRACT_ADDRESS
+        from opengradient.client._conversions import convert_to_model_input, convert_to_model_output
+        from opengradient.client._utils import run_with_retry
+        from opengradient.types import InferenceMode, InferenceResult
+        from web3 import Web3
+        from web3.logs import DISCARD
+
+        def _patched_infer(self, model_cid, inference_mode, model_input, max_retries=None):
+            def execute_transaction():
+                contract = self._blockchain.eth.contract(
+                    address=Web3.to_checksum_address(self._inference_hub_contract_address),
+                    abi=self.inference_abi,
+                )
+                precompile_contract = self._blockchain.eth.contract(
+                    address=Web3.to_checksum_address(PRECOMPILE_CONTRACT_ADDRESS),
+                    abi=self.precompile_abi,
+                )
+                converted_input = convert_to_model_input(model_input)
+                run_function = contract.functions.run(model_cid, inference_mode.value, converted_input)
+                tx_hash, tx_receipt = self._send_tx_with_revert_handling(run_function)
+
+                # 1) Try event logs (standard path)
+                parsed_logs = contract.events.InferenceResult().process_receipt(tx_receipt, errors=DISCARD)
+                if parsed_logs:
+                    model_output = convert_to_model_output(parsed_logs[0]["args"])
+                    if model_output:
+                        return InferenceResult(tx_hash.hex(), model_output)
+
+                # 2) Fallback: node API via precompile event
+                logger.info("Event logs empty/unparseable, trying node API fallback...")
+                precompile_logs = precompile_contract.events.ModelInferenceEvent().process_receipt(tx_receipt, errors=DISCARD)
+                if precompile_logs:
+                    inference_id = precompile_logs[0]["args"]["inferenceID"]
+                    result = self._get_inference_result_from_node(inference_id, inference_mode)
+                    model_output = convert_to_model_output(result)
+                    if model_output:
+                        return InferenceResult(tx_hash.hex(), model_output)
+
+                raise RuntimeError(f"No inference result from event logs or node API (tx: {tx_hash.hex()[:16]}...)")
+
+            return run_with_retry(execute_transaction, max_retries)
+
+        Alpha.infer = _patched_infer
+        logger.info("Patched Alpha.infer() with node API fallback")
+    except Exception as e:
+        logger.warning(f"Failed to patch Alpha.infer: {e}")
+
+_patch_alpha_infer()
+
+
 # ── Model Registry ──────────────────────────────────────────────────────────
 
 MODELS = {
@@ -171,7 +226,7 @@ def _get_og_client():
         os.environ["OG_PRIVATE_KEY"] = pk
         _og_client = og.Alpha(
             private_key=pk,
-            rpc_url="https://eth-devnet.opengradient.ai",
+            # Default RPC: ogevmdevnet (chain 10740) — wallet has ETH here
         )
         logger.info(f"OpenGradient Alpha initialized | RPC: {_og_client._blockchain.provider.endpoint_uri} | Chain: {_og_client._blockchain.eth.chain_id}")
         return _og_client
@@ -210,128 +265,82 @@ def _parse_workflow_output(raw) -> float:
 
 
 async def run_inference(model_key: str) -> dict:
-    """
-    Run forecast inference for SUI/USDT.
+    """Run on-chain inference with current candle data via alpha.infer()."""
+    import opengradient as og
 
-    Priority: 1) Workflow contract (read state) → 2) infer() → 3) Simulation
-    """
     model = MODELS.get(model_key)
     if not model:
         return {"error": f"Unknown model: {model_key}"}
 
-    # Step 1: Fetch candles for metadata + chart
+    # Fetch current OHLC candles
     binance_interval = _INTERVAL_MAP.get(model["binance_interval"], model["binance_interval"])
-    try:
-        candles = await fetch_ohlc(binance_interval, model["candles"])
-        candles = candles[-model["candles"]:]
-        if len(candles) < model["candles"]:
-            return {"error": f"Not enough candle data: got {len(candles)}, need {model['candles']}"}
-    except Exception as e:
-        return {"error": f"Failed to fetch OHLC: {e}"}
+    candles = await fetch_ohlc(binance_interval, model["candles"])
+    candles = candles[-model["candles"]:]
+    if len(candles) < model["candles"]:
+        return {"error": f"Not enough candles: {len(candles)}/{model['candles']}"}
 
     ohlc_input = [[c["open"], c["high"], c["low"], c["close"]] for c in candles]
     current_price = candles[-1]["close"]
     input_time = candles[-1]["time"]
 
-    def _build_result(predicted_return, source, tx_hash=None):
-        predicted_price = current_price * (1 + predicted_return)
-        return {
-            "model": model_key,
-            "model_name": model["name"],
-            "horizon": model["horizon"],
-            "current_price": current_price,
-            "predicted_return": round(predicted_return * 100, 4),
-            "predicted_price": round(predicted_price, 4),
-            "direction": "UP" if predicted_return > 0 else "DOWN",
-            "confidence": model["accuracy"],
-            "tx_hash": tx_hash,
-            "verified": source != "simulation",
-            "simulated": source == "simulation",
-            "source": source,
-            "input_candles": len(ohlc_input),
-            "input_time": input_time,
-            "timestamp": int(time.time()),
-            "ohlc_input": ohlc_input,
-        }
-
     client = _get_og_client()
     if not client:
         raise ValueError("OpenGradient client not initialized — check OG_PRIVATE_KEY")
 
-    # On-chain inference via workflow contract — triggers fresh run, waits for result
-    contract_addr = WORKFLOW_CONTRACTS.get(model_key)
-    if not contract_addr:
-        raise ValueError(f"No workflow contract for model {model_key}")
-
-    logger.info(f"[{model_key}] Running workflow {contract_addr[:12]}... (waiting for on-chain result)")
+    # Strategy 1: Run inference on-chain with current data
+    tx_hash = None
+    source = "infer"
     try:
-        raw = await asyncio.to_thread(_run_workflow_fixed_gas, client, contract_addr)
-        predicted_return = _parse_workflow_output(raw)
-        logger.info(f"[{model_key}] Workflow result: return={predicted_return:.6f}")
-        return _build_result(predicted_return, source="workflow")
+        logger.info(f"[{model_key}] Running infer() with CID={model['cid'][:20]}...")
+        result = await asyncio.to_thread(
+            client.infer,
+            model_cid=model["cid"],
+            inference_mode=og.InferenceMode.VANILLA,
+            model_input={model["input_key"]: ohlc_input},
+        )
+        logger.info(f"[{model_key}] infer() OK: {result.model_output}, tx={result.transaction_hash[:16]}...")
+        predicted_return = _parse_workflow_output(result.model_output)
+        tx_hash = result.transaction_hash
     except Exception as e:
-        logger.error(f"[{model_key}] FAILED: {type(e).__name__}: {e}")
-        raise
+        logger.warning(f"[{model_key}] infer() failed: {e}")
 
+        # Strategy 2: Read latest result from pre-deployed workflow contract
+        contract_addr = WORKFLOW_CONTRACTS.get(model_key)
+        if contract_addr:
+            try:
+                logger.info(f"[{model_key}] Falling back to workflow contract {contract_addr[:12]}...")
+                workflow_result = await asyncio.to_thread(
+                    client.read_workflow_result, contract_addr
+                )
+                logger.info(f"[{model_key}] Workflow result: {workflow_result}")
+                predicted_return = _parse_workflow_output(workflow_result)
+                source = "workflow"
+            except Exception as e2:
+                raise ValueError(f"Both infer() and workflow fallback failed: {e} | {e2}") from e
+        else:
+            raise
 
-def _run_workflow_fixed_gas(client, contract_address: str):
-    """run_workflow with gas limit fixed to fit block gas limit (10M)."""
-    from web3 import Web3
+    logger.info(f"[{model_key}] Predicted return: {predicted_return:.6f} (source={source})")
 
-    # Approach 1: SDK official method
-    try:
-        logger.info("Trying SDK run_workflow()...")
-        result = client.run_workflow(contract_address)
-        logger.info(f"SDK run_workflow OK: {result}")
-        return result
-    except Exception as e:
-        logger.warning(f"SDK run_workflow failed: {e}")
-
-    # Approach 2: Manual tx with correct gas + minimal ABI
-    MINIMAL_ABI = [
-        {"inputs": [], "name": "run", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
-        {"inputs": [], "name": "getInferenceResult", "outputs": [
-            {"components": [
-                {"name": "name", "type": "string"},
-                {"name": "values", "type": "int256[]"},
-                {"name": "decimals", "type": "uint8[]"},
-                {"name": "shape", "type": "uint256[]"},
-            ], "internalType": "struct ModelOutput[]", "name": "", "type": "tuple[]"}
-        ], "stateMutability": "view", "type": "function"},
-    ]
-
-    contract = client._blockchain.eth.contract(
-        address=Web3.to_checksum_address(contract_address),
-        abi=MINIMAL_ABI,
-    )
-    nonce = client._blockchain.eth.get_transaction_count(client._wallet_account.address, "pending")
-    run_fn = contract.functions.run()
-
-    try:
-        estimated = run_fn.estimate_gas({"from": client._wallet_account.address})
-        gas = min(int(estimated * 1.5), 9_000_000)
-    except Exception:
-        gas = 9_000_000
-
-    tx = run_fn.build_transaction({
-        "from": client._wallet_account.address,
-        "nonce": nonce,
-        "gas": gas,
-        "gasPrice": client._blockchain.eth.gas_price,
-        "chainId": client._blockchain.eth.chain_id,
-    })
-    signed = client._wallet_account.sign_transaction(tx)
-    tx_hash = client._blockchain.eth.send_raw_transaction(signed.raw_transaction)
-    logger.info(f"Workflow tx sent: {tx_hash.hex()[:16]}... gas={gas}")
-    receipt = client._blockchain.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
-    logger.info(f"Workflow tx mined! block={receipt['blockNumber']} status={receipt['status']}")
-
-    if receipt["status"] == 0:
-        raise RuntimeError("Workflow tx reverted")
-
-    raw = contract.functions.getInferenceResult().call()
-    logger.info(f"Raw getInferenceResult: {raw}")
-    return raw
+    predicted_price = current_price * (1 + predicted_return)
+    return {
+        "model": model_key,
+        "model_name": model["name"],
+        "horizon": model["horizon"],
+        "current_price": current_price,
+        "predicted_return": round(predicted_return * 100, 4),
+        "predicted_price": round(predicted_price, 4),
+        "direction": "UP" if predicted_return > 0 else "DOWN",
+        "confidence": model["accuracy"],
+        "tx_hash": tx_hash,
+        "verified": True,
+        "simulated": False,
+        "source": source,
+        "input_candles": len(ohlc_input),
+        "input_time": input_time,
+        "timestamp": int(time.time()),
+        "ohlc_input": ohlc_input,
+    }
 
 
 # ── Prediction History (in-memory ring buffer) ─────────────────────────────
