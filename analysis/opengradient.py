@@ -17,6 +17,12 @@ def _unverified_ssl_context(*args, **kwargs):
 ssl.create_default_context = _unverified_ssl_context
 
 import opengradient as og
+import opengradient.client.llm as _og_llm_mod
+from opengradient.client.llm import StaticTEEConnection
+
+# --- x402 TIMEOUT FIX (default 60s too short for LLM inference) ---
+_og_llm_mod._REQUEST_TIMEOUT = 120
+
 import x402.http.x402_http_client_base as x402_base
 from x402.http.utils import decode_payment_required_header
 from x402.schemas.v1 import PaymentRequiredV1
@@ -105,19 +111,37 @@ class OpenGradientAnalyzer:
 
         try:
             logger.info("Initializing OpenGradient Analyzer (Extreme Resilience)...")
-            
-            # Global patches handle everything now
-            self._llm_instance = og.LLM(
-                private_key=private_key,
-                llm_server_url="https://llm.opengradient.ai"
-            )
+
+            # SDK v0.9.9 removed llm_server_url param — always hits on-chain registry.
+            # Registry is empty → "No active LLM proxy TEE found" error.
+            # Fix: build LLM normally (registry lookup happens in __init__), then
+            # replace _tee with StaticTEEConnection pointing to the known endpoint.
+            _OG_LLM_URL = "https://llm.opengradient.ai"
+            try:
+                self._llm_instance = og.LLM(private_key=private_key)
+                logger.info("LLM initialized via registry.")
+            except (ValueError, RuntimeError) as e:
+                if "No active LLM proxy TEE" in str(e) or "registry" in str(e).lower():
+                    logger.warning(f"Registry lookup failed ({e}), using static TEE endpoint.")
+                    # Build LLM with a dummy approach: create object without __init__,
+                    # then manually set up fields mirroring __init__ logic.
+                    self._llm_instance = object.__new__(og.LLM)
+                    from eth_account import Account as _Account
+                    self._llm_instance._wallet_account = _Account.from_key(private_key)
+                    x402_client = og.LLM._build_x402_client(private_key)
+                    self._llm_instance._tee = StaticTEEConnection(
+                        x402_client=x402_client, endpoint=_OG_LLM_URL
+                    )
+                    logger.info(f"✅ Static TEE connection: {_OG_LLM_URL}")
+                else:
+                    raise
             
             # --- MANDATORY: ENSURE PERMIT2 APPROVAL ---
             # As requested by user: enhance logging and fail-hard on approval issues.
             print("🛡️ Ensuring Permit2 OPG approval (5.0 OPG)...")
             try:
                 # Use a larger amount (5.0 OPG) to ensure longevity.
-                approval = self._llm_instance.ensure_opg_approval(opg_amount=5.0)
+                approval = self._llm_instance.ensure_opg_approval(min_allowance=5.0)
                 # approval is typically an OPGApprovalResponse with allowance_before, allowance_after, tx_hash
                 logger.info(f"✅ Permit2 status: before={getattr(approval, 'allowance_before', 'N/A')}, after={getattr(approval, 'allowance_after', 'N/A')}, tx={getattr(approval, 'tx_hash', 'None')}")
                 if getattr(approval, 'tx_hash', None):
@@ -133,35 +157,41 @@ class OpenGradientAnalyzer:
                 # Return early without setting _initialized = True
                 return
 
-            # Model mapping (Updated to match latest SDK and user request)
-            self.model_map = {
+            # Model mapping — built dynamically to avoid AttributeError on SDK upgrades
+            _candidates = {
                 # OpenAI
-                "openai/gpt-5": og.TEE_LLM.GPT_5,
-                "openai/gpt-5-2": og.TEE_LLM.GPT_5_2,
-                "openai/gpt-5-mini": og.TEE_LLM.GPT_5_MINI,
-                "openai/gpt-4.1-2025-04-14": og.TEE_LLM.GPT_4_1_2025_04_14,
-                "openai/o4-mini": og.TEE_LLM.O4_MINI,
-                
+                "openai/gpt-5": "GPT_5",
+                "openai/gpt-5-2": "GPT_5_2",
+                "openai/gpt-5-mini": "GPT_5_MINI",
+                "openai/gpt-4.1-2025-04-14": "GPT_4_1_2025_04_14",
+                "openai/o4-mini": "O4_MINI",
                 # Anthropic
-                "anthropic/claude-opus-4-6": og.TEE_LLM.CLAUDE_OPUS_4_6,
-                "anthropic/claude-opus-4-5": og.TEE_LLM.CLAUDE_OPUS_4_5,
-                "anthropic/claude-sonnet-4-6": og.TEE_LLM.CLAUDE_SONNET_4_6,
-                "anthropic/claude-sonnet-4-5": og.TEE_LLM.CLAUDE_SONNET_4_5,
-                "anthropic/claude-haiku-4-5": og.TEE_LLM.CLAUDE_HAIKU_4_5,
-                
+                "anthropic/claude-opus-4-6": "CLAUDE_OPUS_4_6",
+                "anthropic/claude-opus-4-5": "CLAUDE_OPUS_4_5",
+                "anthropic/claude-sonnet-4-6": "CLAUDE_SONNET_4_6",
+                "anthropic/claude-sonnet-4-5": "CLAUDE_SONNET_4_5",
+                "anthropic/claude-haiku-4-5": "CLAUDE_HAIKU_4_5",
                 # Google
-                "google/gemini-3-pro": og.TEE_LLM.GEMINI_3_PRO,
-                "google/gemini-3-flash": og.TEE_LLM.GEMINI_3_FLASH,
-                "google/gemini-2.5-pro": og.TEE_LLM.GEMINI_2_5_PRO,
-                "google/gemini-2.5-flash": og.TEE_LLM.GEMINI_2_5_FLASH,
-                "google/gemini-2.5-flash-lite": og.TEE_LLM.GEMINI_2_5_FLASH_LITE,
-
+                "google/gemini-3-pro": "GEMINI_3_PRO",
+                "google/gemini-3-flash": "GEMINI_3_FLASH",
+                "google/gemini-2.5-pro": "GEMINI_2_5_PRO",
+                "google/gemini-2.5-flash": "GEMINI_2_5_FLASH",
+                "google/gemini-2.5-flash-lite": "GEMINI_2_5_FLASH_LITE",
                 # xAI
-                "x-ai/grok-4": og.TEE_LLM.GROK_4,
-                "x-ai/grok-4-fast": og.TEE_LLM.GROK_4_FAST,
-                "x-ai/grok-4.1-fast": og.TEE_LLM.GROK_4_1_FAST,
-                "x-ai/grok-4-1-fast-non-reasoning": og.TEE_LLM.GROK_4_1_FAST_NON_REASONING,
+                "x-ai/grok-4": "GROK_4",
+                "x-ai/grok-4-fast": "GROK_4_FAST",
+                "x-ai/grok-4.1-fast": "GROK_4_1_FAST",
+                "x-ai/grok-4-1-fast": "GROK_4_1_FAST",
+                "x-ai/grok-4-1-fast-non-reasoning": "GROK_4_1_FAST_NON_REASONING",
             }
+            self.model_map = {}
+            for key, attr in _candidates.items():
+                if hasattr(og.TEE_LLM, attr):
+                    self.model_map[key] = getattr(og.TEE_LLM, attr)
+                else:
+                    # TEE_LLM is a str enum — pass model string directly as fallback
+                    self.model_map[key] = key
+                    logger.info(f"TEE_LLM.{attr} not in SDK enum, using raw string: {key}")
 
             self._initialized = True
             logger.info("✅ OpenGradient Analyzer successfully initialized (Patched & Approved).")

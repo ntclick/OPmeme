@@ -1,0 +1,25 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "coincheckgo-api",
+      "runtimeExecutable": ".venv/Scripts/uvicorn.exe",
+      "runtimeArgs": ["main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"],
+      "port": 8080
+    },
+    {
+      "name": "opg-bridge-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "cwd": "opg-bridge/frontend"
+    },
+    {
+      "name": "phonezoo-next",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3001,
+      "cwd": "F:\\Work\\Phonezoo\\phonezoo-next"
+    }
+  ]
+}
