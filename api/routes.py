@@ -31,10 +31,17 @@ from database import crud
 from scrapers.solana_scraper import SolanaScraper
 from scrapers.evm_scraper import create_evm_scraper
 from scrapers.birdeye_client import create_birdeye_client
+from scrapers.rugcheck_client import get_rugcheck_client
+from scrapers.solana_tracker_client import get_solana_tracker_client
 from analysis.technical_analyzer import TechnicalAnalyzer
 from analysis.liquidity_analyzer import LiquidityAnalyzer
 from analysis.opengradient import OpenGradientAnalyzer
+from analysis.wash_detector import detect_wash_trade_score
+from analysis.volatility import realized_volatility, volume_trend_delta
+from analysis.cross_validator import cross_validate_scores
 from utils.cache import cache, CacheKeys, CacheTTL
+import scoring_loader
+import os as _os
 
 
 def _detect_chain(address: str) -> str:
@@ -663,21 +670,146 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         if isinstance(token_info, dict) and token_age_hours is not None:
             token_info["age_hours"] = token_age_hours
         
-        overall = _calc_overall_v31(
+        # ═══════════════════════════════════════════════════════════════════
+        # v4.0 — Parallel enrichment: RugCheck + OHLCV + recent txs
+        # ═══════════════════════════════════════════════════════════════════
+        # Fires three independent fetches in one gather(). Each is optional;
+        # any failure degrades gracefully to None and scoring substitutes
+        # sensible defaults (see _calc_overall_v40 + YAML config).
+        rugcheck_report: dict | None = None
+        ohlcv_candles: list | None = None
+        recent_txs: list | None = None
+        tracker_report: dict | None = None
+
+        async def _fetch_rugcheck():
+            if chain_type != "solana" or not contract_address:
+                return None
+            try:
+                rc = get_rugcheck_client(cache=cache)
+                return await rc.get_report(contract_address)
+            except Exception as e:
+                logger.info(f"RugCheck skipped ({e})")
+                return None
+
+        async def _fetch_ohlcv():
+            if chain_type != "solana" or not contract_address:
+                return None
+            try:
+                # 24 × 1h candles → 24h realized vol window
+                return await birdeye_client.get_ohlcv(
+                    contract_address, interval="1H", limit=24
+                )
+            except Exception as e:
+                logger.info(f"OHLCV skipped ({e})")
+                return None
+
+        async def _fetch_recent_txs():
+            if (
+                chain_type != "solana"
+                or not contract_address
+                or _os.getenv("ENABLE_WASH_DETECTION", "true").lower() == "false"
+            ):
+                return None
+            try:
+                return await birdeye_client.get_token_txs(contract_address, limit=50)
+            except Exception as e:
+                logger.info(f"Recent txs skipped ({e})")
+                return None
+
+        async def _fetch_solana_tracker():
+            if chain_type != "solana" or not contract_address:
+                return None
+            try:
+                st = get_solana_tracker_client(cache=cache)
+                if not st.enabled:
+                    return None
+                return await st.get_token(contract_address)
+            except Exception as e:
+                logger.info(f"Solana Tracker skipped ({e})")
+                return None
+
+        rugcheck_report, ohlcv_candles, recent_txs, tracker_report = await asyncio.gather(
+            _fetch_rugcheck(),
+            _fetch_ohlcv(),
+            _fetch_recent_txs(),
+            _fetch_solana_tracker(),
+        )
+
+        if rugcheck_report:
+            logger.info(
+                f"🛡️ RugCheck: risk={rugcheck_report.get('risk_score_1_10')}, "
+                f"insider={rugcheck_report.get('insider_pct'):.1f}%, "
+                f"lp_locked={rugcheck_report.get('lp_locked_pct'):.0f}%"
+            )
+
+        # --- Realized volatility + volume trend from OHLCV ---
+        realized_vol_value: float | None = None
+        volume_trend_value: float | None = None
+        if ohlcv_candles:
+            realized_vol_value = realized_volatility(ohlcv_candles)
+            volume_trend_value = volume_trend_delta(ohlcv_candles)
+            logger.info(
+                f"📉 Volatility: {realized_vol_value if realized_vol_value is None else f'{realized_vol_value:.2f}'} "
+                f"| Volume trend: {volume_trend_value}%"
+            )
+
+        # --- Wash-trade heuristic from recent txs ---
+        wash_result = None
+        wash_score_value: float | None = None
+        if recent_txs:
+            wash_result = detect_wash_trade_score(recent_txs)
+            if not wash_result.get("insufficient_data"):
+                wash_score_value = wash_result["score"]
+                logger.info(
+                    f"🧼 Wash score: {wash_score_value:.2f} "
+                    f"(flip={wash_result['components']['rapid_flip']:.2f}, "
+                    f"unique={wash_result['components']['low_unique_ratio']:.2f}, "
+                    f"conc={wash_result['components']['volume_concentration']:.2f})"
+                )
+
+        # Compute real volume/mcap ratio so v4.0 Market.Vol/MCap sub-score
+        # reflects the raw data (wash-trade ceiling at 5x) rather than the
+        # legacy blended `volume_score`.
+        _vol24 = birdeye_data.get("volume_24h") or _safe_get(dex_data, "volume", "h24") or 0
+        _mc = float(market_cap) if isinstance(market_cap, (int, float)) else 0.0
+        vm_ratio = (_vol24 / _mc) if (_mc > 0 and _vol24 > 0) else None
+
+        overall = _calc_overall_v40(
             momentum=momentum_result.get("momentum_score", 50),
             volume=volume_result.get("volume_score", 50),
             trade=trade_result.get("trade_pressure_score", 50),
             liquidity=liquidity_result.get("liquidity_score", 50),
             holder=holder_score,
-            security=security_result.get("security_score", 50),
+            security_legacy=security_result.get("security_score", 50),
             whale=whale_score,
             market_cap=market_cap,
             token_info=token_info,
             holder_data=holder_data,
             liq_usd=liq_usd,
             age_hours=token_age_hours,
-            holder_count=holder_count
+            holder_count=holder_count,
+            rugcheck=rugcheck_report,
+            wash_trade_score=wash_score_value,
+            realized_vol=realized_vol_value,
+            volume_trend_delta=volume_trend_value,
+            vol_mcap_ratio=vm_ratio,
         )
+
+        # --- Cross-validate signals across sources ---
+        cross_validation = cross_validate_scores(
+            birdeye={"top10_pct": top10_pct, "holder_count": holder_count} if top10_pct is not None else None,
+            rugcheck=rugcheck_report,
+            tracker=tracker_report,
+        )
+        if tracker_report:
+            logger.info(
+                f"📊 Solana Tracker: risk={tracker_report.get('risk_score')}, "
+                f"top10={tracker_report.get('top10_pct')}"
+            )
+        if cross_validation["conflicting"]:
+            logger.info(
+                f"⚠️ Cross-validation conflicts: {cross_validation['conflicts']}"
+            )
         
         logger.info(f"📊 Overall: {overall['score']}/100 ({overall['risk']}) "
                    f"[raw={overall['raw']}, cap={overall.get('cap')}]")
@@ -685,10 +817,15 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # ══════════════════════════════════════════════════════════════════════
         # STEP 4: Build Flags
         # ══════════════════════════════════════════════════════════════════════
-        
+
+        # Compute rug_score composite early — red/green flags reference it
+        # (previously computed later near the LLM context; moved up to avoid
+        # an undefined-variable error when expert flags fire).
+        rug_composite = _calc_rug_score_composite(rugcheck_report, holder_data, token_info)
+
         red_flags = []
         green_flags = []
-        
+
         # Override reasons → RED FLAGS (CRITICAL FIX!)
         if overall.get("overrides"):
             red_flags.extend(overall["overrides"])
@@ -718,7 +855,115 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         # Security signals
         if token_info.get("is_mint_renounced") or token_info.get("mint_authority") is None:
             green_flags.append("Mint authority renounced — supply cannot be inflated by printing more tokens")
-        
+
+        # ─────────────────────────────────────────────────────────────────
+        # v4.0 EXPERT FLAGS — surface the specific data-driven signals so the
+        # LLM and UI don't have to infer them from raw numbers.
+        # ─────────────────────────────────────────────────────────────────
+
+        vol_24h_flag = birdeye_data.get("volume_24h") or _safe_get(dex_data, "volume", "h24") or 0
+        mc_flag = float(market_cap) if isinstance(market_cap, (int, float)) else 0.0
+
+        # 1) Vol/MCap ratio — the single strongest wash-trading tell
+        if mc_flag > 0 and vol_24h_flag > 0:
+            vm_ratio = vol_24h_flag / mc_flag
+            if vm_ratio >= 5.0:
+                red_flags.append(
+                    f"Volume/MCap = {vm_ratio:.1f}x (${vol_24h_flag:,.0f} vol on ${mc_flag:,.0f} mcap) — "
+                    f"statistically impossible for organic trading, almost certainly wash"
+                )
+            elif vm_ratio >= 2.0:
+                red_flags.append(
+                    f"Volume/MCap = {vm_ratio:.1f}x — manipulation territory, real volume/mcap rarely exceeds 1x"
+                )
+            elif 0.1 <= vm_ratio <= 0.5:
+                green_flags.append(
+                    f"Volume/MCap = {vm_ratio:.2f}x — healthy organic trading range"
+                )
+
+        # 2) Realized volatility (annualized)
+        if realized_vol_value is not None:
+            if realized_vol_value > 5.0:
+                red_flags.append(
+                    f"Realized volatility {realized_vol_value:.1f}× annualized — "
+                    f"BTC is ~0.8×, normal crypto 1.5–3×. This is pump-dump territory"
+                )
+            elif realized_vol_value < 0.8:
+                green_flags.append(
+                    f"Realized volatility {realized_vol_value:.2f}× — low-risk price action"
+                )
+
+        # 3) Wash trade score from tx-pattern detector (separate from vol/mcap)
+        if wash_score_value is not None:
+            if wash_score_value > 0.5:
+                comp = (wash_result or {}).get("components", {})
+                red_flags.append(
+                    f"Wash-trade pattern detected (score {wash_score_value:.2f}) — "
+                    f"rapid buy-sell flips {comp.get('rapid_flip', 0):.0%}, "
+                    f"concentration {comp.get('volume_concentration', 0):.0%}"
+                )
+            elif wash_score_value < 0.2:
+                green_flags.append(
+                    f"Clean trade pattern (wash score {wash_score_value:.2f}) — unique wallets, no rapid flips"
+                )
+
+        # 4) Rug composite (independent risk index 0–100, higher = worse)
+        rc_pct = rug_composite["rug_score"]
+        if rc_pct >= 70:
+            red_flags.append(
+                f"Rug score {rc_pct:.0f}/100 — composite risk index in DANGER zone"
+            )
+        elif rc_pct <= 20:
+            green_flags.append(
+                f"Rug score {rc_pct:.0f}/100 — composite index in SAFE zone"
+            )
+
+        # 5) RugCheck specific fields (when available)
+        if rugcheck_report:
+            ins = float(rugcheck_report.get("insider_pct") or 0)
+            bun = float(rugcheck_report.get("bundler_pct") or 0)
+            snp = float(rugcheck_report.get("sniper_pct") or 0)
+            lp_lk = float(rugcheck_report.get("lp_locked_pct") or 0)
+
+            if ins >= 10:
+                red_flags.append(
+                    f"Insider wallets hold {ins:.1f}% of supply (RugCheck) — coordinated dump risk"
+                )
+            elif ins < 3 and (ins + bun + snp) < 10:
+                green_flags.append(
+                    f"Low insider/bundler/sniper exposure ({ins:.1f}% / {bun:.1f}% / {snp:.1f}%)"
+                )
+
+            if lp_lk >= 80:
+                burned_note = " (burned)" if rugcheck_report.get("lp_burned") else " (locked)"
+                green_flags.append(f"LP {lp_lk:.0f}% secured{burned_note} via RugCheck — dev can't pull liquidity")
+            elif lp_lk < 20:
+                red_flags.append(
+                    f"LP only {lp_lk:.0f}% locked — dev can rug-pull liquidity at any moment"
+                )
+
+            if not rugcheck_report.get("freeze_authority_active"):
+                green_flags.append("Freeze authority disabled — dev cannot freeze user wallets")
+
+        # 6) Holder + age context (already have override caps, but surface plain-language)
+        if holder_count and holder_count < 500:
+            # Already in caps; add human framing only when really bad
+            if holder_count < 100 and not any("holders" in f.lower() for f in red_flags):
+                red_flags.append(
+                    f"Only {holder_count} holders — one coordinated dump crashes this to zero"
+                )
+
+        # 7) Cross-source conflict
+        if cross_validation["conflicting"]:
+            red_flags.append(
+                f"Signals disagree across sources ({', '.join(cross_validation['sources_used'])}) — "
+                f"data reliability is LOW"
+            )
+
+        # Dedupe while preserving order
+        red_flags = list(dict.fromkeys(red_flags))
+        green_flags = list(dict.fromkeys(green_flags))
+
         # ══════════════════════════════════════════════════════════════════════
         # STEP 5: Run OpenGradient AI Inference
         # ══════════════════════════════════════════════════════════════════════
@@ -795,14 +1040,62 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "chart_url": chart_url,
         }
 
+        # rug_composite already computed earlier in STEP 4 (flag building).
         on_chain_context = {
             "holders": holder_data,
             "token_info": token_info,
             "liquidity_usd": liq_usd,
             "market_data": market_data,
-            "smart_money": {} # Disable for now to save tokens
+            "smart_money": {},            # disabled
+            # v4.0 — enrich LLM context without changing prompt shape:
+            # the existing analyze_coin() dumps on_chain_data as JSON, so extra
+            # keys flow through as additional signal without code changes.
+            "rugcheck": {
+                "risk_score": rugcheck_report.get("risk_score_1_10"),
+                "insider_pct": rugcheck_report.get("insider_pct"),
+                "bundler_pct": rugcheck_report.get("bundler_pct"),
+                "sniper_pct": rugcheck_report.get("sniper_pct"),
+                "lp_locked_pct": rugcheck_report.get("lp_locked_pct"),
+                "mint_authority_active": rugcheck_report.get("mint_authority_active"),
+                "freeze_authority_active": rugcheck_report.get("freeze_authority_active"),
+                "top_holders_pct": rugcheck_report.get("top_holders_pct"),
+                "risks": rugcheck_report.get("risks", [])[:6],
+            } if rugcheck_report else None,
+            "v4_breakdown": {
+                "security_total": overall.get("security_total"),
+                "market_total": overall.get("market_total"),
+                "momentum_total": overall.get("momentum_total"),
+                "rug_score": rug_composite["rug_score"],
+                "rug_score_breakdown": rug_composite["breakdown"],
+                "overrides_triggered": overall.get("overrides", [])[:12],
+                "wash_trade_score": wash_score_value,
+                "wash_trade_breakdown": (wash_result or {}).get("components"),
+                "realized_volatility": round(realized_vol_value, 3) if realized_vol_value is not None else None,
+                "volume_trend_delta_pct": volume_trend_value,
+                "confidence": cross_validation["confidence"],
+                "conflicting_signals": cross_validation["conflicting"],
+                # Full sub-score breakdown so the LLM can cite exact numbers
+                # that match what the UI displays.
+                "components": overall.get("components"),
+            },
+            # Raw signal numbers — lets the LLM reason about ratios (vol/mcap
+            # = 16.7x) and flag wash-trade territory without re-deriving them.
+            "raw_signals": {
+                "vol_mcap_ratio": round(vm_ratio, 3) if vm_ratio is not None else None,
+                "liquidity_mcap_pct": (round(liq_usd / market_cap * 100, 2)
+                                       if isinstance(market_cap, (int, float)) and market_cap > 0 else None),
+                "top10_pct": top10_pct,
+                "buy_volume_pct": volume_result.get("buy_volume_pct"),
+                "buy_sell_ratio": trade_result.get("buy_sell_ratio"),
+                "holder_count": holder_count,
+                "age_hours": token_age_hours,
+            },
+            # Pre-computed analyst flags — saves the LLM from re-deriving the
+            # same conclusions. It should still lead with the 1–3 strongest.
+            "red_flags_detected": red_flags,
+            "green_flags_detected": green_flags,
         }
-        
+
         scores_context = {
             "overall_score": overall["score"],
             "holder_score": holder_score,
@@ -851,10 +1144,26 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             )
 
         # OpenGradient inference result
+        # Graceful degrade: if the TEE/AI call fails (network, registry, timeout,
+        # rate-limit), we still return the full algorithmic audit (scores,
+        # breakdown_v4, rug_score, red/green flags). The user sees everything
+        # except the LLM narrative — which is better than a blanket 502.
         ai_error = ai_result.get("error") if isinstance(ai_result, dict) else None
         if ai_error:
-            logger.error(f"❌ OpenGradient error: {ai_error}")
-            raise HTTPException(status_code=502, detail=f"OpenGradient AI processing failed: {ai_error}")
+            logger.warning(f"⚠️ OpenGradient error (degrading gracefully): {ai_error}")
+            ai_result = {
+                "ai_result": {
+                    "verdict": (
+                        f"**Algorithmic analysis only.** The AI verdict layer is temporarily "
+                        f"unavailable (`{ai_error[:120]}`).\n\n"
+                        f"The score, breakdown, and red/green flags below were computed from "
+                        f"on-chain data (Birdeye, RugCheck, DexScreener). Use them as your "
+                        f"primary signal. Re-run the audit in a minute for the LLM narrative."
+                    ),
+                },
+                "used_opengradient": False,
+                "error": ai_error,
+            }
         ai_trust_score = None
         ai_inference_success = False
         tx_hash = None
@@ -863,10 +1172,16 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
         verification = None
         verify_url = None
         verdict = ""
-        
+        verdict_action = None
+
+        # When the AI path failed (graceful-degrade above), surface the fallback
+        # verdict text so the UI doesn't render an empty card.
+        if ai_error and isinstance(ai_result.get("ai_result"), dict):
+            verdict = ai_result["ai_result"].get("verdict", "") or ""
+
         if ai_result.get("ai_result") and ai_result.get("used_opengradient"):
             ai_data = ai_result["ai_result"]
-            
+
             # Only use AI score if SUCCESSFUL (not default fallback)
             if not ai_data.get("verdict", "").startswith("AI Analysis failed"):
                 ai_trust_score = ai_data.get("ai_trust_score")
@@ -879,7 +1194,8 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     tx_hash = None
                 verify_url = f"https://explorer.opengradient.ai/tx/{tx_hash}" if tx_hash else None
                 verdict = ai_data.get("verdict", "")
-                logger.info(f"✅ AI inference SUCCESS: trust={ai_trust_score}, tx={tx_hash}")
+                verdict_action = ai_data.get("verdict_action")
+                logger.info(f"✅ AI inference SUCCESS: trust={ai_trust_score}, action={verdict_action}, tx={tx_hash}")
                 
                 # Merge AI flags
                 red_flags.extend(ai_data.get("red_flags", []))
@@ -906,6 +1222,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             top_red = red_flags[0] if red_flags else None
 
             if score >= 70:
+                verdict_action = verdict_action or "APE"
                 verdict = (
                     f"${ticker}: Lower risk than average for a meme coin based on current on-chain + market signals. "
                     f"Positive signal: {top_green or 'none detected'}. "
@@ -913,6 +1230,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     "Not financial advice. Meme coins are high-volatility; you can lose 100%."
                 )
             elif score >= 50:
+                verdict_action = verdict_action or "WATCH"
                 verdict = (
                     f"${ticker}: Mixed signals. Positive signal: {top_green or 'none detected'}. "
                     f"Main risk: {top_red or 'none detected'}. "
@@ -920,12 +1238,14 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                     "Not financial advice. Meme coins are high-volatility; you can lose 100%."
                 )
             elif score >= 35:
+                verdict_action = verdict_action or "SKIP"
                 verdict = (
                     f"${ticker}: High risk. Main risk: {top_red or 'multiple risk factors'}. "
                     "If you are new, avoid or only risk money you can afford to lose. "
                     "Not financial advice. Meme coins are high-volatility; you can lose 100%."
                 )
             else:
+                verdict_action = verdict_action or "RUN"
                 verdict = (
                     f"${ticker}: Extreme caution. Main risk: {top_red or 'severe risk factors'}. "
                     "For beginners, the safest action is to avoid. "
@@ -1022,7 +1342,72 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
                 }
             }
         }
-        
+
+        # ─── v4.0 BREAKDOWN (emitted alongside legacy shape) ─────────────────
+        # UI consumers that understand v4.0 can read this; legacy UI ignores it
+        # and keeps reading `breakdown` unchanged.
+        v4_weights = overall.get("weights") or {"security": 0.40, "market": 0.35, "momentum": 0.25}
+        v4_components = overall.get("components") or {}
+        sec_c = v4_components.get("security") or {}
+        mkt_c = v4_components.get("market") or {}
+        mom_c = v4_components.get("momentum") or {}
+        sec_total = float(overall.get("security_total") or 0)
+        mkt_total = float(overall.get("market_total") or 0)
+        mom_total = float(overall.get("momentum_total") or 0)
+        breakdown_v4 = {
+            "scoring_version": "4.0",
+            "weights": {
+                "security": f"{v4_weights['security']*100:.0f}%",
+                "market": f"{v4_weights['market']*100:.0f}%",
+                "momentum": f"{v4_weights['momentum']*100:.0f}%",
+            },
+            "security": {
+                "total": round(sec_total, 1),
+                "weight": f"{v4_weights['security']*100:.0f}%",
+                "contribution": round(sec_total * v4_weights["security"], 1),
+                "components": {
+                    "mint_authority": {"score": sec_c.get("mint", 0), "weight": "25%",
+                                       "active": sec_c.get("mint_active", False)},
+                    "freeze_authority": {"score": sec_c.get("freeze", 0), "weight": "25%",
+                                         "active": sec_c.get("freeze_active", False)},
+                    "lp_locked": {"score": sec_c.get("lp_locked", 0), "weight": "25%",
+                                  "locked_pct": sec_c.get("lp_locked_pct", 0)},
+                    "insider_clusters": {"score": sec_c.get("insider", 0), "weight": "25%",
+                                         "insider_pct": sec_c.get("insider_pct", 0),
+                                         "bundler_pct": sec_c.get("bundler_pct", 0)},
+                },
+            },
+            "market": {
+                "total": round(mkt_total, 1),
+                "weight": f"{v4_weights['market']*100:.0f}%",
+                "contribution": round(mkt_total * v4_weights["market"], 1),
+                "components": {
+                    "liquidity": {"score": mkt_c.get("liquidity", 0), "weight": "29%",
+                                  "liquidity_usd": liq_usd},
+                    "volume_mcap_ratio": {"score": mkt_c.get("volume_mcap", 0), "weight": "23%"},
+                    "buy_sell_pressure": {"score": mkt_c.get("buy_sell", 0), "weight": "20%",
+                                          "buy_sell_ratio": trade_result.get("buy_sell_ratio")},
+                    "top10_holder_pct": {"score": mkt_c.get("top10", 0), "weight": "14%",
+                                         "top10_pct": top10_pct},
+                    "wash_trade": {"score": mkt_c.get("wash", 60), "weight": "14%"},
+                },
+            },
+            "momentum": {
+                "total": round(mom_total, 1),
+                "weight": f"{v4_weights['momentum']*100:.0f}%",
+                "contribution": round(mom_total * v4_weights["momentum"], 1),
+                "components": {
+                    "price_action": {"score": mom_c.get("price_action", 50), "weight": "40%",
+                                     "trend": momentum_result.get("trend")},
+                    "realized_volatility": {"score": mom_c.get("volatility", 50), "weight": "32%"},
+                    "volume_trend": {"score": mom_c.get("volume_trend", 50), "weight": "28%"},
+                },
+            },
+            "rug_score": rug_composite["rug_score"],
+            "rug_score_breakdown": rug_composite["breakdown"],
+            "overrides_applied": overall.get("overrides", []),
+        }
+
         data_sources = {
             "chain": chain_type,
             "birdeye": {"used": bool(birdeye_used), "holder_count": birdeye_data.get("holder_count"),
@@ -1030,6 +1415,17 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "dexscreener": {"used": bool(dex_data), "liquidity_usd": _safe_get(dex_data, "liquidity", "usd")},
             "solana_rpc": {"used": bool(token_info) and chain_type == "solana"},
             "evm_scan": {"used": bool(token_info) and chain_type == "evm", "chain": token_info.get("chain", "base") if chain_type == "evm" else None},
+            "rugcheck": {
+                "used": bool(rugcheck_report),
+                "risk_score_1_10": (rugcheck_report or {}).get("risk_score_1_10"),
+                "insider_pct": (rugcheck_report or {}).get("insider_pct"),
+                "lp_locked_pct": (rugcheck_report or {}).get("lp_locked_pct"),
+            },
+            "solana_tracker": {
+                "used": bool(tracker_report),
+                "risk_score": (tracker_report or {}).get("risk_score"),
+                "top10_pct": (tracker_report or {}).get("top10_pct"),
+            },
             "twitter": {"status": "DISABLED"}
         }
         
@@ -1041,6 +1437,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "risk_level": overall["risk"],
             "scores": scores,
             "breakdown": breakdown,
+            "breakdown_v4": breakdown_v4,
             "market_data": market_data,
             "technical_indicators": {
                 "trend": momentum_result.get("trend"),
@@ -1049,8 +1446,18 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             },
             "signals": {"bullish": green_flags, "bearish": red_flags, "neutral": []},
             "verdict": verdict,
+            "verdict_action": verdict_action,
             "red_flags": red_flags,
             "green_flags": green_flags,
+            "rug_score": rug_composite["rug_score"],
+            "rug_score_breakdown": rug_composite["breakdown"],
+            "wash_trade_score": wash_score_value,
+            "wash_trade_breakdown": (wash_result or {}).get("components") if wash_result else None,
+            "realized_volatility": round(realized_vol_value, 3) if realized_vol_value is not None else None,
+            "volume_trend_delta_pct": volume_trend_value,
+            "confidence_score": cross_validation["confidence"],
+            "conflicting_signals": cross_validation["conflicting"],
+            "cross_validation": cross_validation,
             "tx_hash": tx_hash,
             "payment_hash": payment_hash,
             "settlement_mode": settlement_mode,
@@ -1062,7 +1469,7 @@ async def analyze_coin(request: AnalyzeRequest, db: Session = Depends(get_db)):
             "opengradient_used": ai_result.get("used_opengradient", False),
             "model_used": ai_result.get("model_cid") or ai_result.get("model_used"),
             "algorithm_notes": [
-                f"Scoring: v3.1 (Technical 65% / On-Chain 35%) - Chain: {chain_type.upper()}",
+                f"Scoring: v4.0 (Security 40% / Market 35% / Momentum 25%) - Chain: {chain_type.upper()}",
                 "Social: DISABLED",
                 f"AI: {'✅ Verified by OpenGradient (TEE + settlement hash)' if ai_inference_success and tx_hash else ('⚠️ OpenGradient inference ok but settlement tx not verifiable yet' if ai_inference_success else '⚠️ Algorithmic Only')}",
                 f"Data: DexScreener={'✅' if dex_data else '❌'}"
@@ -1399,14 +1806,20 @@ def _calc_whale_score(top10: float | None) -> int:
     return 5
 
 
-def _calc_overall_v31(
+def _calc_overall_v31_legacy(
     momentum: int, volume: int, trade: int, liquidity: int,
     holder: int, security: int, whale: int,
     market_cap: float,
     token_info: dict, holder_data: dict, liq_usd: float, age_hours: float | None, holder_count: int
 ) -> dict:
     """
-    Overall score v3.1: Technical 65% / On-Chain 35% / Social 0%
+    [LEGACY — kept for rollback / reference]
+    Overall score v3.1: Technical 65% / On-Chain 35% / Social 0%.
+
+    Superseded by _calc_overall_v40 (Security 40% / Market 35% / Momentum 25%),
+    which is RugCheck-primary and YAML-driven. This function is no longer
+    called from the analyze pipeline but is retained so historical behavior
+    can be reproduced if needed.
     """
     # Technical (65%)
     tech = momentum * 0.20 + volume * 0.15 + trade * 0.10 + liquidity * 0.20
@@ -1584,6 +1997,406 @@ def _calc_overall_v31(
         "overrides": overrides,
         "tech_total": tech,
         "onchain_total": onchain
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v4.0 SCORING — RugCheck-primary, YAML-driven
+# Weights: Security(40%) + Market(35%) + Momentum(25%)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _v40_security_subscores(rugcheck: dict | None, token_info: dict, age_hours: float | None) -> dict:
+    """
+    Security bucket sub-scores (0-100 each).
+    RugCheck is primary source. When unavailable, falls back to on-chain RPC.
+    """
+    sec_cfg = scoring_loader.get_section("security")
+    lp_cfg = sec_cfg.get("lp_lock", {})
+
+    # Mint / freeze authority
+    if rugcheck is not None:
+        mint_active = bool(rugcheck.get("mint_authority_active"))
+        freeze_active = bool(rugcheck.get("freeze_authority_active"))
+    else:
+        mint_active = bool(token_info.get("mint_authority")) and not token_info.get("is_mint_renounced")
+        freeze_active = bool(token_info.get("freeze_authority"))
+
+    mint_score = sec_cfg.get("mint", {}).get("disabled_score", 100) if not mint_active \
+        else sec_cfg.get("mint", {}).get("active_score", 0)
+    freeze_score = sec_cfg.get("freeze", {}).get("disabled_score", 100) if not freeze_active \
+        else sec_cfg.get("freeze", {}).get("active_score", 20)
+
+    # LP lock/burn (FIX for long-standing TODO in solana_scraper.py:362)
+    lp_locked_pct = 0.0
+    if rugcheck is not None:
+        lp_locked_pct = float(rugcheck.get("lp_locked_pct") or 0.0)
+    full_burn = lp_cfg.get("full_burn_pct", 80)
+    if lp_locked_pct >= full_burn:
+        lp_score = lp_cfg.get("burn_score", 100)
+    elif lp_locked_pct >= 20:
+        lp_score = lp_cfg.get("partial_score", 60)
+    else:
+        # Unknown ≠ unlocked. Without RugCheck data we can't penalise — use partial.
+        lp_score = lp_cfg.get("unlocked_score", 10) if rugcheck is not None else lp_cfg.get("partial_score", 60)
+
+    # Insider clusters (via RugCheck bundler + insider %)
+    insider_pct = float(rugcheck.get("insider_pct") or 0.0) if rugcheck else 0.0
+    bundler_pct = float(rugcheck.get("bundler_pct") or 0.0) if rugcheck else 0.0
+    combined = insider_pct + bundler_pct * 0.5  # bundlers less severe than persistent insiders
+    if rugcheck is None:
+        insider_score = 60          # no data, neutral-positive
+    elif combined < 5:
+        insider_score = 100
+    elif combined < 10:
+        insider_score = 75
+    elif combined < 20:
+        insider_score = 45
+    elif combined < 30:
+        insider_score = 25
+    else:
+        insider_score = 5
+
+    return {
+        "mint": int(mint_score),
+        "freeze": int(freeze_score),
+        "lp_locked": int(lp_score),
+        "insider": int(insider_score),
+        "lp_locked_pct": lp_locked_pct,
+        "insider_pct": insider_pct,
+        "bundler_pct": bundler_pct,
+        "mint_active": mint_active,
+        "freeze_active": freeze_active,
+    }
+
+
+def _v40_momentum_subscores(
+    momentum_score: int,
+    realized_vol: float | None,
+    volume_trend_delta: float | None,
+) -> dict:
+    vol_cfg = scoring_loader.get_section("volatility")
+    vt_cfg = scoring_loader.get_section("volume_trend")
+    vol_score = scoring_loader.tier_score(
+        realized_vol,
+        vol_cfg.get("tiers", []),
+        vol_cfg.get("scores", []),
+        below_min=vol_cfg.get("above_max_score", 5),
+        unknown=vol_cfg.get("insufficient_data_score", 50),
+        descending=False,
+    )
+    vt_score = scoring_loader.tier_score(
+        volume_trend_delta,
+        vt_cfg.get("tiers", []),
+        vt_cfg.get("scores", []),
+        below_min=vt_cfg.get("below_min_score", 15),
+        unknown=50,
+    )
+    return {
+        "price_action": int(momentum_score),
+        "volatility": int(vol_score),
+        "volume_trend": int(vt_score),
+    }
+
+
+def _v40_market_subscores(
+    liquidity_score: int,
+    volume_score: int,
+    trade_pressure_score: int,
+    whale_score: int,
+    wash_trade_score: float | None,
+    vol_mcap_ratio: float | None = None,
+) -> dict:
+    """
+    Market sub-scores. `vol_mcap_ratio` is the raw volume_24h / market_cap
+    number — when supplied, we tier it against the YAML `volume_mcap` config
+    directly (which has the wash-trade ceiling and manipulation tiers).
+    Falls back to the legacy composite `volume_score` when the ratio is not
+    provided (e.g. market_cap unknown).
+    """
+    # wash_trade_score is 0-1 where 1 = full wash. Invert to 0-100 where 100 = healthy.
+    wash_0_100 = 60 if wash_trade_score is None else int(round((1.0 - max(0.0, min(1.0, wash_trade_score))) * 100))
+
+    if vol_mcap_ratio is not None:
+        vm_cfg = scoring_loader.get_section("volume_mcap") or {}
+        ceiling = vm_cfg.get("wash_trade_ceiling", 5.0)
+        manip = vm_cfg.get("manipulation_tier", 2.0)
+        hot = vm_cfg.get("hot_trade_tier", 1.0)
+        if vol_mcap_ratio >= ceiling:
+            vm_score = 15          # statistically impossible = wash
+        elif vol_mcap_ratio >= manip:
+            vm_score = 30
+        elif vol_mcap_ratio > hot:
+            vm_score = 45
+        else:
+            vm_score = scoring_loader.tier_score(
+                vol_mcap_ratio,
+                vm_cfg.get("tiers", []),
+                vm_cfg.get("scores", []),
+                below_min=vm_cfg.get("below_min_score", 15),
+                unknown=50,
+            )
+    else:
+        vm_score = int(volume_score)
+
+    return {
+        "liquidity": int(liquidity_score),
+        "volume_mcap": int(vm_score),
+        "buy_sell": int(trade_pressure_score),
+        "top10": int(whale_score),
+        "wash": wash_0_100,
+    }
+
+
+def _v40_apply_override_caps(
+    cap: int,
+    overrides: list,
+    holder_count: int,
+    age_hours: float | None,
+    liq_usd: float,
+    market_cap: float,
+    token_info: dict,
+    holder_data: dict,
+    rugcheck: dict | None,
+    wash_trade_score: float | None,
+) -> tuple[int, list]:
+    """
+    Apply v4.0 YAML-driven override caps.
+
+    Pattern: each rule is a {new, established, large} triple; the rule picks
+    the cap that matches the token's maturity class, else skips (null).
+    """
+    caps_cfg = scoring_loader.get_section("override_caps") or {}
+    est_cfg = caps_cfg.get("established", {}) or {}
+    lg_cfg = caps_cfg.get("large", {}) or {}
+
+    is_established = (holder_count > (est_cfg.get("holders_min", 10000))) or \
+                     (age_hours is not None and age_hours > est_cfg.get("age_hours_min", 720))
+    is_large = (liq_usd > (lg_cfg.get("liquidity_usd_min", 1_000_000))) or \
+               (holder_count > lg_cfg.get("holders_min", 50000))
+
+    def apply(rule_key: str, condition: bool, msg: str):
+        nonlocal cap
+        if not condition:
+            return
+        rule = caps_cfg.get(rule_key) or {}
+        klass = "large" if is_large else ("established" if is_established else "new")
+        ceiling = rule.get(klass)
+        if ceiling is None:
+            return
+        # Always record the risk factor for LLM/user visibility; cap
+        # only tightens to the lowest ceiling across rules.
+        cap = min(cap, ceiling)
+        overrides.append(f"{msg} (max {ceiling}/100)")
+
+    # Mint / Freeze
+    if rugcheck is not None:
+        mint_active = bool(rugcheck.get("mint_authority_active"))
+        freeze_active = bool(rugcheck.get("freeze_authority_active"))
+    else:
+        mint_active = bool(token_info.get("mint_authority")) and not token_info.get("is_mint_renounced")
+        freeze_active = bool(token_info.get("freeze_authority"))
+    apply("mint_active", mint_active, "Mint authority active — supply can be inflated")
+    apply("freeze_active", freeze_active, "Freeze authority active — wallets can be frozen")
+
+    # Liquidity
+    apply("liquidity_under_10k", 0 < liq_usd < 10_000, f"Very low liquidity (${liq_usd:,.0f})")
+    apply("liquidity_10k_50k", 10_000 <= liq_usd < 50_000, f"Low liquidity (${liq_usd:,.0f})")
+    apply("liquidity_50k_100k", 50_000 <= liq_usd < 100_000, f"Moderate-low liquidity (${liq_usd:,.0f})")
+
+    # Market cap
+    mc = float(market_cap) if isinstance(market_cap, (int, float)) else 0.0
+    if mc > 0:
+        apply("mcap_under_100k", mc < 100_000, f"Very low market cap (${mc:,.0f})")
+        apply("mcap_100k_300k", 100_000 <= mc < 300_000, f"Low market cap (${mc:,.0f})")
+        apply("mcap_300k_1m", 300_000 <= mc < 1_000_000, f"Small market cap (${mc:,.0f})")
+
+    # Concentration
+    top10 = holder_data.get("top10_pct") if isinstance(holder_data, dict) else None
+    largest = holder_data.get("largest_holder_pct") if isinstance(holder_data, dict) else None
+    top10 = float(top10) if isinstance(top10, (int, float)) else None
+    largest = float(largest) if isinstance(largest, (int, float)) else None
+    if top10 is not None:
+        apply("top10_over_80", top10 > 80, f"Top 10 hold {top10:.1f}%")
+        apply("top10_over_70", 70 < top10 <= 80, f"Top 10 hold {top10:.1f}%")
+        apply("top10_over_60", 60 < top10 <= 70, f"Top 10 hold {top10:.1f}%")
+    if largest is not None:
+        apply("largest_over_25", largest > 25, f"Largest holder owns {largest:.1f}%")
+
+    # Holders
+    apply("holders_under_100", bool(holder_count) and holder_count < 100,
+          f"Very few holders ({holder_count})")
+    apply("holders_under_500_new", bool(holder_count) and 100 <= holder_count < 500,
+          f"Low holder count ({holder_count})")
+
+    # Age
+    if age_hours is not None and age_hours < 24:
+        apply("age_under_24h_growing", holder_count > 1000, f"Very new token ({age_hours:.1f}h)")
+        apply("age_under_24h_small", holder_count <= 1000, f"Very new token ({age_hours:.1f}h)")
+
+    # v4.0-new: RugCheck-driven caps
+    if rugcheck is not None:
+        ins = float(rugcheck.get("insider_pct") or 0.0)
+        apply("insider_pct_over_30", ins > 30, f"Insider wallets hold {ins:.1f}% (RugCheck)")
+        lp = float(rugcheck.get("lp_locked_pct") or 0.0)
+        apply("lp_unlocked", lp < 20, f"LP not locked/burned ({lp:.0f}% locked)")
+    if wash_trade_score is not None:
+        apply("wash_trade_score_high", wash_trade_score > 0.7,
+              f"Wash-trade signal high ({wash_trade_score:.2f})")
+
+    return cap, overrides
+
+
+def _calc_rug_score_composite(
+    rugcheck: dict | None,
+    holder_data: dict,
+    token_info: dict,
+) -> dict:
+    """
+    Composite rug score 0-100 (HIGHER = riskier). Independent of the trust score.
+    Uses RugCheck where available; falls back to holder_data / token_info.
+    """
+    cfg = scoring_loader.get_section("rug_score") or {}
+    w = cfg.get("weights", {}) or {}
+
+    def _f(v, default=0.0) -> float:
+        try:
+            return float(v) if v is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    insider_pct = _f(rugcheck.get("insider_pct") if rugcheck else 0.0)
+    lp_locked_pct = _f(rugcheck.get("lp_locked_pct") if rugcheck else 0.0)
+    lp_unlocked_pct = max(0.0, 100.0 - lp_locked_pct)
+    top10_pct = _f(rugcheck.get("top_holders_pct") if rugcheck else None) or _f(holder_data.get("top10_pct") if isinstance(holder_data, dict) else None)
+    sniper_pct = _f(rugcheck.get("sniper_pct") if rugcheck else 0.0)
+    bundler_pct = _f(rugcheck.get("bundler_pct") if rugcheck else 0.0)
+
+    if rugcheck is not None:
+        mint_active = bool(rugcheck.get("mint_authority_active"))
+    else:
+        mint_active = bool(token_info.get("mint_authority")) and not token_info.get("is_mint_renounced")
+    mint_penalty = cfg.get("mint_active_value", 50) if mint_active else 0
+
+    rug = (
+        insider_pct * w.get("insider_pct", 0.25) +
+        lp_unlocked_pct * w.get("lp_unlocked_pct", 0.25) +
+        top10_pct * w.get("top10_pct", 0.20) +
+        sniper_pct * w.get("sniper_pct", 0.15) +
+        bundler_pct * w.get("bundler_pct", 0.10) +
+        mint_penalty * w.get("mint_active_penalty", 0.05)
+    )
+    rug = max(0.0, min(100.0, rug))
+
+    return {
+        "rug_score": round(rug, 1),
+        "breakdown": {
+            "insider_pct": round(insider_pct, 2),
+            "lp_unlocked_pct": round(lp_unlocked_pct, 2),
+            "sniper_pct": round(sniper_pct, 2),
+            "bundler_pct": round(bundler_pct, 2),
+            "top10_pct": round(top10_pct, 2),
+        },
+    }
+
+
+def _calc_overall_v40(
+    momentum: int,
+    volume: int,
+    trade: int,
+    liquidity: int,
+    holder: int,
+    security_legacy: int,
+    whale: int,
+    market_cap: float,
+    token_info: dict,
+    holder_data: dict,
+    liq_usd: float,
+    age_hours: float | None,
+    holder_count: int,
+    rugcheck: dict | None = None,
+    wash_trade_score: float | None = None,
+    realized_vol: float | None = None,
+    volume_trend_delta: float | None = None,
+    vol_mcap_ratio: float | None = None,
+) -> dict:
+    """
+    Overall score v4.0.
+
+    Blend: Security(40%) + Market(35%) + Momentum(25%).
+    RugCheck drives security when available; YAML drives all thresholds and
+    override caps.
+
+    Returns a dict with the same keys as legacy (score/risk/raw/cap/overrides/
+    tech_total/onchain_total) PLUS new v4.0 fields so downstream code keeps
+    working unchanged.
+    """
+    weights = scoring_loader.get_weights() or {}
+    w_sec = float(weights.get("security", 0.40))
+    w_mkt = float(weights.get("market", 0.35))
+    w_mom = float(weights.get("momentum", 0.25))
+
+    sec_sub = _v40_security_subscores(rugcheck, token_info, age_hours)
+    mkt_sub = _v40_market_subscores(liquidity, volume, trade, whale, wash_trade_score, vol_mcap_ratio=vol_mcap_ratio)
+    mom_sub = _v40_momentum_subscores(momentum, realized_vol, volume_trend_delta)
+
+    sc = weights.get("security_components", {}) or {}
+    mc = weights.get("market_components", {}) or {}
+    mmc = weights.get("momentum_components", {}) or {}
+
+    security_total = (
+        sec_sub["mint"] * float(sc.get("mint_authority_disabled", 0.25)) +
+        sec_sub["freeze"] * float(sc.get("freeze_authority_disabled", 0.25)) +
+        sec_sub["lp_locked"] * float(sc.get("lp_locked_or_burned", 0.25)) +
+        sec_sub["insider"] * float(sc.get("no_insider_clusters", 0.25))
+    )
+    market_total = (
+        mkt_sub["liquidity"] * float(mc.get("liquidity_tier", 0.286)) +
+        mkt_sub["volume_mcap"] * float(mc.get("volume_mcap_ratio", 0.229)) +
+        mkt_sub["buy_sell"] * float(mc.get("buy_sell_pressure", 0.200)) +
+        mkt_sub["top10"] * float(mc.get("top10_holder_pct", 0.143)) +
+        mkt_sub["wash"] * float(mc.get("wash_trade_score", 0.143))
+    )
+    momentum_total = (
+        mom_sub["price_action"] * float(mmc.get("price_action_multi_tf", 0.40)) +
+        mom_sub["volatility"] * float(mmc.get("realized_volatility", 0.32)) +
+        mom_sub["volume_trend"] * float(mmc.get("volume_trend_delta", 0.28))
+    )
+
+    raw = security_total * w_sec + market_total * w_mkt + momentum_total * w_mom
+
+    cap, overrides = _v40_apply_override_caps(
+        cap=100, overrides=[],
+        holder_count=holder_count, age_hours=age_hours, liq_usd=liq_usd,
+        market_cap=market_cap, token_info=token_info, holder_data=holder_data,
+        rugcheck=rugcheck, wash_trade_score=wash_trade_score,
+    )
+
+    final = max(0, min(100, min(int(raw), cap)))
+    risk = scoring_loader.get_risk_level(final)
+
+    # Backward-compat synthesized fields for downstream display code
+    tech_total_legacy = market_total * w_mkt + momentum_total * w_mom
+    onchain_total_legacy = security_total * w_sec
+
+    return {
+        "score": final,
+        "risk": risk,
+        "raw": int(raw),
+        "cap": cap if cap < 100 else None,
+        "overrides": overrides,
+        "tech_total": tech_total_legacy,
+        "onchain_total": onchain_total_legacy,
+        # v4.0 native
+        "version": "4.0",
+        "security_total": round(security_total, 1),
+        "market_total": round(market_total, 1),
+        "momentum_total": round(momentum_total, 1),
+        "components": {
+            "security": sec_sub,
+            "market": mkt_sub,
+            "momentum": mom_sub,
+        },
+        "weights": {"security": w_sec, "market": w_mkt, "momentum": w_mom},
     }
 
 

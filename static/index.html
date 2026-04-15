@@ -197,6 +197,59 @@
             background-color: #050505;
             color: #ffffff;
         }
+
+        /* Verdict card styles */
+        .verdict-content p { margin-bottom: 0.5rem; }
+        .verdict-content p:last-child { margin-bottom: 0; }
+        .verdict-content ul {
+            list-style: none;
+            padding: 0;
+            margin: 0.75rem 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .verdict-content li {
+            position: relative;
+            padding-left: 1.25rem;
+            color: #d1d5db;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .verdict-content li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0.55em;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #00ff9d, #10b981);
+        }
+        .verdict-content strong {
+            color: #ffffff;
+            font-weight: 700;
+        }
+        .verdict-content em {
+            color: #9ca3af;
+            font-style: italic;
+        }
+        /* Highlighted metric numbers in verdict */
+        .verdict-metric {
+            display: inline;
+            color: #00ff9d;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+        /* Action badge pulse */
+        .verdict-badge-glow {
+            animation: badgePulse 2s ease-in-out infinite;
+        }
+        @keyframes badgePulse {
+            0%, 100% { box-shadow: 0 0 8px currentColor; }
+            50% { box-shadow: 0 0 20px currentColor; }
+        }
     </style>
 </head>
 
@@ -248,7 +301,7 @@
                         class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
                     <span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
                 </span>
-                v3.1 Technical Focus
+                v4.0 RugCheck-Primary
             </div>
             <h1 class="text-5xl md:text-7xl font-bold mb-6 tracking-tight">
                 <span id="heroTitle1">Don't Buy </span><span id="heroTitleTrash"
@@ -420,9 +473,39 @@
                         </div>
 
                         <div id="tokenNameDisplay" class="text-sm text-gray-500 font-medium mb-3"></div>
-                        <p id="verdictDisplay" class="text-xl text-gray-300 font-medium mb-6 leading-relaxed">
-                            Analysis pending...
-                        </p>
+
+                        <!-- Expert Verdict Card — v4.1 redesign.
+                             Shows verdict_action badge (APE/WATCH/SKIP/RUN) alongside
+                             the structured LLM narrative. Premium glassmorphism surface. -->
+                        <div id="verdictCard" class="relative rounded-2xl p-[1px] mb-6 overflow-hidden" style="background: linear-gradient(135deg, rgba(0,255,157,0.15) 0%, rgba(255,255,255,0.05) 50%, rgba(157,0,255,0.15) 100%);">
+                            <div class="relative rounded-2xl bg-gradient-to-br from-[#0d1117] via-[#0f1318] to-[#0d1117] p-6 overflow-hidden">
+                                <!-- Ambient glow -->
+                                <div id="verdictGlow" class="absolute top-0 right-0 w-48 h-48 rounded-full blur-[80px] -mr-16 -mt-16 pointer-events-none opacity-30" style="background: rgba(0,255,157,0.3);"></div>
+                                <div class="absolute bottom-0 left-0 w-32 h-32 rounded-full blur-[60px] -ml-12 -mb-12 pointer-events-none opacity-20" style="background: rgba(157,0,255,0.3);"></div>
+
+                                <!-- Header row: label + action badge -->
+                                <div class="flex items-center justify-between mb-4 relative z-10">
+                                    <div class="flex items-center gap-2 text-xs uppercase tracking-[0.15em] text-primary/80 font-bold">
+                                        <div class="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center border border-primary/20">
+                                            <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+                                        </div>
+                                        <span>Expert Verdict</span>
+                                    </div>
+                                    <!-- Verdict action badge (populated by JS) -->
+                                    <div id="verdictActionBadge" class="hidden px-4 py-1.5 rounded-full text-xs font-black tracking-widest uppercase border transition-all duration-500" style="letter-spacing: 0.1em;">
+                                        --
+                                    </div>
+                                </div>
+
+                                <!-- Verdict body (populated by JS) -->
+                                <div id="verdictDisplay" class="relative z-10 text-[15px] text-gray-200 font-medium leading-[1.75] verdict-content">
+                                    <div class="flex items-center gap-2 text-gray-500">
+                                        <div class="w-1.5 h-1.5 rounded-full bg-gray-600 animate-pulse"></div>
+                                        Analysis pending...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
                         <!-- Market Data Row -->
                         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" id="marketDataRow">
@@ -470,151 +553,290 @@
                 </div>
             </div>
 
-            <!-- Detailed Breakdown Grid (3 columns for v3.1 weights) -->
-            <h3 id="scoreBreakdownTitle" class="text-xl font-bold mb-4 flex items-center gap-2 text-gray-200">
+            <!-- ═══════════════════════════════════════════════════════════════
+                 v4.0 SCORE BREAKDOWN — Radial + Bar Design
+                 ═══════════════════════════════════════════════════════════════ -->
+            <h3 id="scoreBreakdownTitle" class="text-xl font-bold mb-6 flex items-center gap-2 text-gray-200">
                 <i data-lucide="bar-chart" class="text-primary w-5 h-5"></i>
                 Score Breakdown
+                <span class="text-xs font-mono text-gray-500 bg-white/5 px-2 py-0.5 rounded ml-2">v4.0</span>
             </h3>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            <!-- ── Three Score Rings Row ── -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
 
-                <!-- Technical (65%) -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col hover:bg-white/5 transition border-t-2 border-blue-500/50">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <div
-                                class="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-400">
-                                <i data-lucide="trending-up" class="w-4 h-4"></i>
+                <!-- SECURITY 40% -->
+                <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-emerald-500/30 transition-all duration-300" style="border:1px solid rgba(255,255,255,0.06)">
+                    <div class="absolute -top-16 -right-16 w-40 h-40 bg-emerald-500/5 rounded-full blur-3xl group-hover:bg-emerald-500/10 transition-all"></div>
+                    <!-- Header -->
+                    <div class="flex items-center justify-between mb-5">
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 flex items-center justify-center border border-emerald-500/20">
+                                <i data-lucide="shield-check" class="w-4.5 h-4.5 text-emerald-400"></i>
                             </div>
-                            <span id="techTitleText"
-                                class="text-sm text-gray-400 font-bold uppercase tracking-wider">Technical</span>
+                            <div>
+                                <span id="securityTitleText" class="text-sm font-bold text-white tracking-wide">SECURITY</span>
+                                <div class="text-[10px] text-emerald-400/70 font-mono">RugCheck-primary</div>
+                            </div>
                         </div>
-                        <span class="text-xs font-mono text-blue-400 bg-blue-500/10 px-2 py-1 rounded">65%</span>
+                        <span class="text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/15">40%</span>
                     </div>
-
-                    <div class="flex items-end gap-2 mb-4">
-                        <span class="text-3xl font-bold text-white" id="techScoreTotal">--</span>
-                        <span class="text-sm text-gray-500 mb-1">/65</span>
+                    <!-- Ring + Score -->
+                    <div class="flex items-center gap-5 mb-5">
+                        <div class="relative flex-shrink-0">
+                            <svg width="80" height="80" viewBox="0 0 80 80" class="transform -rotate-90">
+                                <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>
+                                <circle id="secRing" cx="40" cy="40" r="34" fill="none" stroke="#10b981" stroke-width="6" stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="213.6" class="transition-all duration-1000 ease-out"/>
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span class="text-lg font-black text-white" id="securityScoreTotal">--</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 space-y-1.5 text-[11px]">
+                            <div class="flex items-center justify-between text-gray-400"><span>Contribution</span><span class="font-mono text-emerald-400" id="secContrib">--</span></div>
+                            <div class="flex items-center justify-between text-gray-400"><span>Weight</span><span class="font-mono text-gray-300">40 pts max</span></div>
+                        </div>
                     </div>
-
-                    <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm">
-                        <div class="flex justify-between items-center">
-                            <span id="momentumLabel" class="text-gray-400">Momentum</span>
-                            <span class="font-mono text-white" id="score_momentum">--</span>
+                    <!-- Sub-score bars -->
+                    <div class="space-y-2.5 pt-4 border-t border-white/5">
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Mint Authority</span><span class="font-mono text-white" id="score_v4_mint">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700" id="bar_v4_mint" style="width:0%"></div></div>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span id="volumeLabel" class="text-gray-400">Volume (24h)</span>
-                            <span class="font-mono text-white" id="score_volume">--</span>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Freeze Authority</span><span class="font-mono text-white" id="score_v4_freeze">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700" id="bar_v4_freeze" style="width:0%"></div></div>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span id="tradePressureLabel" class="text-gray-400">Trade Pressure</span>
-                            <span class="font-mono text-white" id="score_trade">--</span>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">LP Locked</span><span class="font-mono text-white" id="score_v4_lp">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-700" id="bar_v4_lp" style="width:0%"></div></div>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span id="liquidityDepthLabel" class="text-gray-400">Liquidity Depth</span>
-                            <span class="font-mono text-white" id="score_liquidity">--</span>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Insider Clusters</span><span class="font-mono text-white" id="score_v4_insider">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-700" id="bar_v4_insider" style="width:0%"></div></div>
                         </div>
                     </div>
                 </div>
 
-                <!-- On-Chain (35%) -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col hover:bg-white/5 transition border-t-2 border-emerald-500/50">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <div
-                                class="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400">
-                                <i data-lucide="link" class="w-4 h-4"></i>
+                <!-- MARKET 35% -->
+                <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-blue-500/30 transition-all duration-300" style="border:1px solid rgba(255,255,255,0.06)">
+                    <div class="absolute -top-16 -right-16 w-40 h-40 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all"></div>
+                    <div class="flex items-center justify-between mb-5">
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-600/10 flex items-center justify-center border border-blue-500/20">
+                                <i data-lucide="candlestick-chart" class="w-4.5 h-4.5 text-blue-400"></i>
                             </div>
-                            <span id="onchainTitleText"
-                                class="text-sm text-gray-400 font-bold uppercase tracking-wider">On-Chain</span>
+                            <div>
+                                <span id="marketTitleText" class="text-sm font-bold text-white tracking-wide">MARKET</span>
+                                <div class="text-[10px] text-blue-400/70 font-mono">Liquidity + Volume</div>
+                            </div>
                         </div>
-                        <span class="text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">35%</span>
+                        <span class="text-xs font-mono text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-500/15">35%</span>
                     </div>
-
-                    <div class="flex items-end gap-2 mb-4">
-                        <span class="text-3xl font-bold text-white" id="onchainScoreTotal">--</span>
-                        <span class="text-sm text-gray-500 mb-1">/35</span>
+                    <div class="flex items-center gap-5 mb-5">
+                        <div class="relative flex-shrink-0">
+                            <svg width="80" height="80" viewBox="0 0 80 80" class="transform -rotate-90">
+                                <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>
+                                <circle id="mktRing" cx="40" cy="40" r="34" fill="none" stroke="#3b82f6" stroke-width="6" stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="213.6" class="transition-all duration-1000 ease-out"/>
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span class="text-lg font-black text-white" id="marketScoreTotal">--</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 space-y-1.5 text-[11px]">
+                            <div class="flex items-center justify-between text-gray-400"><span>Contribution</span><span class="font-mono text-blue-400" id="mktContrib">--</span></div>
+                            <div class="flex items-center justify-between text-gray-400"><span>Weight</span><span class="font-mono text-gray-300">35 pts max</span></div>
+                        </div>
                     </div>
-
-                    <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm">
-                        <div class="flex justify-between items-center">
-                            <span id="holdersBaseLabel" class="text-gray-400">Holders Base</span>
-                            <span class="font-mono text-white" id="score_holder">--</span>
+                    <div class="space-y-2.5 pt-4 border-t border-white/5">
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Liquidity</span><span class="font-mono text-white" id="score_v4_liquidity">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-700" id="bar_v4_liquidity" style="width:0%"></div></div>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span id="contractSecurityLabel" class="text-gray-400">Contract Security</span>
-                            <span class="font-mono text-white" id="score_security">--</span>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Vol/MCap</span><span class="font-mono text-white" id="score_v4_volmcap">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-700" id="bar_v4_volmcap" style="width:0%"></div></div>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span id="whaleRiskLabel" class="text-gray-400">Whale Risk</span>
-                            <span class="font-mono text-white" id="score_whale">--</span>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Buy/Sell Pressure</span><span class="font-mono text-white" id="score_v4_buysell">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-400 transition-all duration-700" id="bar_v4_buysell" style="width:0%"></div></div>
+                        </div>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Top 10 Holders</span><span class="font-mono text-white" id="score_v4_top10">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-400 transition-all duration-700" id="bar_v4_top10" style="width:0%"></div></div>
+                        </div>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Wash Trade</span><span class="font-mono text-white" id="score_v4_wash">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-blue-500 to-sky-400 transition-all duration-700" id="bar_v4_wash" style="width:0%"></div></div>
                         </div>
                     </div>
                 </div>
 
-                <!-- OpenGradient AI Verified (0%) -->
-                <div
-                    class="glass-panel p-5 rounded-xl flex flex-col hover:bg-white/5 transition border-t-2 border-secondary/50 opacity-80">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <div
-                                class="w-8 h-8 rounded-full bg-secondary/10 flex items-center justify-center text-secondary">
-                                <i data-lucide="cpu" class="w-4 h-4"></i>
+                <!-- MOMENTUM 25% -->
+                <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-purple-500/30 transition-all duration-300" style="border:1px solid rgba(255,255,255,0.06)">
+                    <div class="absolute -top-16 -right-16 w-40 h-40 bg-purple-500/5 rounded-full blur-3xl group-hover:bg-purple-500/10 transition-all"></div>
+                    <div class="flex items-center justify-between mb-5">
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-500/20 to-purple-600/10 flex items-center justify-center border border-purple-500/20">
+                                <i data-lucide="trending-up" class="w-4.5 h-4.5 text-purple-400"></i>
                             </div>
-                            <span id="aiVerifiedTitleText"
-                                class="text-sm text-gray-400 font-bold uppercase tracking-wider">AI Verified</span>
+                            <div>
+                                <span id="momentumTitleText" class="text-sm font-bold text-white tracking-wide">MOMENTUM</span>
+                                <div class="text-[10px] text-purple-400/70 font-mono">Price + Volatility</div>
+                            </div>
                         </div>
-                        <span class="text-xs font-mono text-secondary bg-secondary/10 px-2 py-1 rounded">ON-CHAIN</span>
+                        <span class="text-xs font-mono text-purple-400 bg-purple-500/10 px-2.5 py-1 rounded-full border border-purple-500/15">25%</span>
+                    </div>
+                    <div class="flex items-center gap-5 mb-5">
+                        <div class="relative flex-shrink-0">
+                            <svg width="80" height="80" viewBox="0 0 80 80" class="transform -rotate-90">
+                                <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>
+                                <circle id="momRing" cx="40" cy="40" r="34" fill="none" stroke="#a855f7" stroke-width="6" stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="213.6" class="transition-all duration-1000 ease-out"/>
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span class="text-lg font-black text-white" id="momentumScoreTotal">--</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 space-y-1.5 text-[11px]">
+                            <div class="flex items-center justify-between text-gray-400"><span>Contribution</span><span class="font-mono text-purple-400" id="momContrib">--</span></div>
+                            <div class="flex items-center justify-between text-gray-400"><span>Weight</span><span class="font-mono text-gray-300">25 pts max</span></div>
+                        </div>
+                    </div>
+                    <div class="space-y-2.5 pt-4 border-t border-white/5">
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Price Action</span><span class="font-mono text-white" id="score_v4_price">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-purple-500 to-fuchsia-400 transition-all duration-700" id="bar_v4_price" style="width:0%"></div></div>
+                        </div>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Realized Volatility</span><span class="font-mono text-white" id="score_v4_volatility">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-purple-500 to-fuchsia-400 transition-all duration-700" id="bar_v4_volatility" style="width:0%"></div></div>
+                        </div>
+                        <div class="v4-bar-row">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="text-gray-400">Volume Trend</span><span class="font-mono text-white" id="score_v4_voltrend">--</span></div>
+                            <div class="h-1.5 rounded-full bg-white/5 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-violet-500 to-purple-400 transition-all duration-700" id="bar_v4_voltrend" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Rug Score Gauge + AI Verified Row ── -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+
+                <!-- RUG SCORE GAUGE -->
+                <div class="glass-panel rounded-2xl p-6 relative overflow-hidden" style="border:1px solid rgba(255,255,255,0.06)">
+                    <div class="flex items-center gap-2.5 mb-5">
+                        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500/20 to-orange-500/10 flex items-center justify-center border border-red-500/20">
+                            <i data-lucide="alert-octagon" class="w-4.5 h-4.5 text-red-400"></i>
+                        </div>
+                        <div>
+                            <span class="text-sm font-bold text-white tracking-wide">RUG SCORE</span>
+                            <div class="text-[10px] text-red-400/70 font-mono">Independent risk index</div>
+                        </div>
+                    </div>
+                    <!-- Horizontal gauge -->
+                    <div class="mb-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs text-gray-500 font-mono">SAFE</span>
+                            <span class="text-2xl font-black" id="rug_score_inline">--</span>
+                            <span class="text-xs text-gray-500 font-mono">DANGER</span>
+                        </div>
+                        <div class="relative h-3 rounded-full overflow-hidden" style="background: linear-gradient(90deg, #10b981 0%, #eab308 40%, #f97316 65%, #ef4444 100%); opacity:0.2;">
+                        </div>
+                        <div class="relative h-3 rounded-full overflow-hidden -mt-3" style="background: linear-gradient(90deg, #10b981 0%, #eab308 40%, #f97316 65%, #ef4444 100%);">
+                            <div id="rugGaugeMask" class="absolute top-0 right-0 h-full bg-[#111111]/90 transition-all duration-1000 ease-out" style="width:100%"></div>
+                        </div>
+                        <div id="rugGaugeNeedle" class="relative h-0 transition-all duration-1000 ease-out" style="margin-left:0%">
+                            <div class="absolute -top-1 left-0 w-0.5 h-5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.5)]" style="transform:translateX(-50%)"></div>
+                        </div>
+                    </div>
+                    <!-- Rug breakdown -->
+                    <div class="grid grid-cols-3 gap-2 pt-3 border-t border-white/5">
+                        <div class="text-center">
+                            <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Authority</div>
+                            <div class="text-sm font-mono font-bold" id="rug_bd_authority">--</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Holder</div>
+                            <div class="text-sm font-mono font-bold" id="rug_bd_holder">--</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-[10px] text-gray-500 uppercase tracking-widest mb-1">LP Risk</div>
+                            <div class="text-sm font-mono font-bold" id="rug_bd_lp">--</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI VERIFIED + DATA SOURCES -->
+                <div class="glass-panel rounded-2xl p-6 relative overflow-hidden" style="border:1px solid rgba(255,255,255,0.06)">
+                    <div class="flex items-center justify-between mb-5">
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-secondary/20 to-secondary/10 flex items-center justify-center border border-secondary/20">
+                                <i data-lucide="cpu" class="w-4.5 h-4.5 text-secondary"></i>
+                            </div>
+                            <div>
+                                <span id="aiVerifiedTitleText" class="text-sm font-bold text-white tracking-wide">AI VERIFIED</span>
+                                <div class="text-[10px] text-secondary/70 font-mono">OpenGradient TEE</div>
+                            </div>
+                        </div>
+                        <span class="text-xs font-mono text-secondary bg-secondary/10 px-2.5 py-1 rounded-full border border-secondary/15">ON-CHAIN</span>
                     </div>
 
-                    <div class="flex flex-col items-start gap-1 mb-4 h-[44px] justify-end">
-                        <span class="text-sm font-bold text-white">Trust Framework v3.1</span>
-                        <span id="aiModelInfo" class="text-[11px] font-mono text-secondary/80">Model: --</span>
-                    </div>
-
-                    <div class="space-y-3 mt-auto pt-4 border-t border-white/5 text-sm text-gray-400">
-                        <p id="aiVerifiedDescText" class="text-xs leading-relaxed">
+                    <div class="mb-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-2 h-2 rounded-full bg-secondary animate-pulse"></div>
+                            <span class="text-sm font-bold text-white">Trust Framework v4.0</span>
+                        </div>
+                        <span id="aiModelInfo" class="text-[11px] font-mono text-secondary/80 block mb-3">Model: --</span>
+                        <p id="aiVerifiedDescText" class="text-xs text-gray-400 leading-relaxed">
                             Scores are processed securely on-chain using OpenGradient's verifiable compute network.
                         </p>
-                        <div class="flex items-center gap-2 mt-2 text-secondary text-xs font-mono">
-                            <i data-lucide="check-circle" class="w-3 h-3"></i> <span
-                                id="computationVerifiedText">Computation Verified</span>
+                    </div>
+
+                    <div class="pt-3 border-t border-white/5 space-y-2">
+                        <div class="flex items-center gap-2 text-xs">
+                            <i data-lucide="check-circle" class="w-3.5 h-3.5 text-secondary"></i>
+                            <span id="computationVerifiedText" class="text-gray-300">Computation Verified</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <i data-lucide="database" class="w-3.5 h-3.5 text-blue-400"></i>
+                            <span class="text-gray-400">Sources: Birdeye + DexScreener + RugCheck + Solana RPC</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <i data-lucide="layers" class="w-3.5 h-3.5 text-emerald-400"></i>
+                            <span class="text-gray-400">Scoring: Security 40% / Market 35% / Momentum 25%</span>
                         </div>
                     </div>
                 </div>
-
             </div>
 
             <!-- Flags Section -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
                 <!-- Red Flags -->
-                <div class="glass-panel p-6 rounded-xl border border-red-500/20 bg-red-500/5 relative overflow-hidden">
-                    <div class="absolute top-0 right-0 w-24 h-24 bg-red-500/10 rounded-full blur-2xl -mr-10 -mt-10">
-                    </div>
+                <div class="glass-panel p-6 rounded-2xl relative overflow-hidden" style="border:1px solid rgba(239,68,68,0.15); background: linear-gradient(135deg, rgba(239,68,68,0.03) 0%, rgba(17,17,17,0.7) 100%);">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-red-500/8 rounded-full blur-3xl -mr-12 -mt-12"></div>
                     <h3 id="redFlagsTitleText"
-                        class="text-red-400 font-bold mb-4 flex items-center gap-2 text-lg relative z-10">
-                        <i data-lucide="alert-triangle" class="w-5 h-5"></i>
-                        Risk Factors (Red Flags)
+                        class="text-red-400 font-bold mb-4 flex items-center gap-2 text-base relative z-10">
+                        <div class="w-7 h-7 rounded-md bg-red-500/10 flex items-center justify-center">
+                            <i data-lucide="alert-triangle" class="w-4 h-4"></i>
+                        </div>
+                        Risk Factors
+                        <span class="text-[10px] font-mono text-red-400/60 ml-auto" id="redFlagCount"></span>
                     </h3>
-                    <ul id="redFlagsList" class="space-y-3 relative z-10">
-                        <!-- Dynamic content -->
-                    </ul>
+                    <ul id="redFlagsList" class="space-y-2.5 relative z-10 text-sm"></ul>
                 </div>
 
                 <!-- Green Flags -->
-                <div class="glass-panel p-6 rounded-xl border border-primary/20 bg-primary/5 relative overflow-hidden">
-                    <div class="absolute top-0 right-0 w-24 h-24 bg-primary/10 rounded-full blur-2xl -mr-10 -mt-10">
-                    </div>
+                <div class="glass-panel p-6 rounded-2xl relative overflow-hidden" style="border:1px solid rgba(0,255,157,0.12); background: linear-gradient(135deg, rgba(0,255,157,0.03) 0%, rgba(17,17,17,0.7) 100%);">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-primary/8 rounded-full blur-3xl -mr-12 -mt-12"></div>
                     <h3 id="greenFlagsTitleText"
-                        class="text-primary font-bold mb-4 flex items-center gap-2 text-lg relative z-10">
-                        <i data-lucide="check-circle-2" class="w-5 h-5"></i>
-                        Positive Signals (Green Flags)
+                        class="text-primary font-bold mb-4 flex items-center gap-2 text-base relative z-10">
+                        <div class="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center">
+                            <i data-lucide="check-circle-2" class="w-4 h-4"></i>
+                        </div>
+                        Positive Signals
+                        <span class="text-[10px] font-mono text-primary/60 ml-auto" id="greenFlagCount"></span>
                     </h3>
-                    <ul id="greenFlagsList" class="space-y-3 relative z-10">
-                        <!-- Dynamic content -->
-                    </ul>
+                    <ul id="greenFlagsList" class="space-y-2.5 relative z-10 text-sm"></ul>
                 </div>
             </div>
 
@@ -632,8 +854,8 @@
                     <a href="https://x.com/trungkts29" target="_blank" rel="noopener noreferrer"
                         class="text-primary hover:text-emerald-300 transition">@trungkts29</a>
                 </div>
-                <div id="scoringAlgoText" class="text-xs text-gray-600 font-mono mt-2" id="metaInfo">
-                    Scoring Algorithm v3.1 (Technical 65% / On-Chain 35%)
+                <div id="scoringAlgoText" class="text-xs text-gray-600 font-mono mt-2">
+                    Scoring Algorithm v4.0 (Security 40% / Market 35% / Momentum 25%) + Rug Score
                 </div>
             </div>
 
@@ -671,6 +893,11 @@
                 aiBadgePending: 'AI Verification Pending',
                 modelLabel: 'Model',
                 scoreBreakdown: 'Score Breakdown',
+                // v4.0 card titles
+                securityTitle: 'Security',
+                marketTitle: 'Market',
+                momentumTitle: 'Momentum',
+                // Legacy v3.1 keys retained for any remaining consumers (safe ignore)
                 techTitle: 'Technical',
                 momentum: 'Momentum',
                 volume: 'Volume (24h)',
@@ -688,7 +915,7 @@
                 noRedFlags: 'No major risk factors detected',
                 noGreenFlags: 'No significant positive signals',
                 verifiableInference: 'Verifiable inference by OpenGradient',
-                scoringAlgo: 'Scoring Algorithm v3.1 (Technical 65% / On-Chain 35%)',
+                scoringAlgo: 'Scoring Algorithm v4.0 (Security 40% / Market 35% / Momentum 25%) + Rug Score',
                 contract: 'Contract: ',
                 unknown: 'Unknown',
                 moon: 'MOON',
@@ -745,16 +972,12 @@
             document.getElementById('aiModelInfo').innerText = `${t.modelLabel}: --`;
 
             document.getElementById('scoreBreakdownTitle').innerText = t.scoreBreakdown;
-            document.getElementById('techTitleText').innerText = t.techTitle;
-            document.getElementById('momentumLabel').innerText = t.momentum;
-            document.getElementById('volumeLabel').innerText = t.volume;
-            document.getElementById('tradePressureLabel').innerText = t.tradePressure;
-            document.getElementById('liquidityDepthLabel').innerText = t.liquidityDepth;
-
-            document.getElementById('onchainTitleText').innerText = t.onchainTitle;
-            document.getElementById('holdersBaseLabel').innerText = t.holdersBase;
-            document.getElementById('contractSecurityLabel').innerText = t.contractSecurity;
-            document.getElementById('whaleRiskLabel').innerText = t.whaleRisk;
+            // v4.0 card titles — IDs differ from v3.1 layout. Null-safe in case
+            // an older template is still cached in the browser.
+            const _setText = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.innerText = val; };
+            _setText('securityTitleText', t.securityTitle || 'Security');
+            _setText('marketTitleText', t.marketTitle || 'Market');
+            _setText('momentumTitleText', t.momentumTitle || 'Momentum');
 
             document.getElementById('aiVerifiedTitleText').innerText = t.aiVerifiedTitle;
             document.getElementById('aiVerifiedDescText').innerText = t.aiVerifiedDesc;
@@ -1275,7 +1498,7 @@
                 const renderMeta = (meta) => {
                     const tx = meta?.tx_hash;
                     if (tx && verdictEl) {
-                        verdictEl.innerText = `Payment settled: ${tx.substring(0, 12)}... (rendering verdict)`;
+                        verdictEl.innerHTML = '<div class="flex items-center gap-2 text-gray-400 text-sm"><div class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></div>Payment settled, rendering verdict...</div>';
                     }
                     if (tx && txHashEl) {
                         txHashEl.innerText = tx.substring(0, 10) + '...';
@@ -1379,9 +1602,11 @@
             const t = translations[currentLang];
             const locale = currentLang === 'vi' ? 'vi-VN' : 'en-US';
             const resultDiv = document.getElementById('result');
-            resultDiv.classList.remove('hidden');
+            if (resultDiv) resultDiv.classList.remove('hidden');
             const modelUsed = data.model_used || '--';
-            document.getElementById('aiModelInfo').innerText = `${t.modelLabel}: ${modelUsed}`;
+            // Null-safe setter — tolerates HTML edits that remove optional IDs
+            const _safeText = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
+            _safeText('aiModelInfo', `${t.modelLabel}: ${modelUsed}`);
 
             const score = Math.round(data.trust_score || data.overall_score);
             const riskConfig = getRiskConfig(score);
@@ -1427,14 +1652,19 @@
 
             const chartSection = document.getElementById('chartSection');
             if (chartSection) {
-                const chartUrl = market.chart_url;
                 const chartAddress = tokenMeta.address || data.contract_address || market.contract_address;
-                if (chartUrl && typeof chartUrl === 'string') {
-                    renderDexChart(chartUrl);
-                } else if (chartAddress) {
-                    renderChartOnly(chartAddress).catch(() => { });
-                } else {
+                // Skip the DexScreener iframe entirely — it renders an empty
+                // token-header card that adds no value and shouts "external
+                // widget". Always render our own lightweight chart from the
+                // /api/ohlcv endpoint, or hide the section when no data.
+                const hasTradableActivity =
+                    (Number(market.liquidity_usd) > 0) || (Number(market.volume_24h) > 0);
+                if (!hasTradableActivity || !chartAddress) {
                     chartSection.classList.add('hidden');
+                } else {
+                    renderChartOnly(chartAddress).catch(() => {
+                        chartSection.classList.add('hidden');
+                    });
                 }
             }
 
@@ -1472,13 +1702,107 @@
 
             const verdictEl = document.getElementById('verdictDisplay');
             if (verdictEl) {
+                // ── Verdict Action Badge ──────────────────────────────────
+                const ACTION_THEME = {
+                    APE:   { bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.4)', text: '#10b981', glow: 'rgba(16,185,129,0.3)', emoji: '🟢', cardBorder: 'rgba(16,185,129,0.25)' },
+                    WATCH: { bg: 'rgba(234,179,8,0.12)',  border: 'rgba(234,179,8,0.4)',  text: '#eab308', glow: 'rgba(234,179,8,0.3)',  emoji: '🟡', cardBorder: 'rgba(234,179,8,0.25)' },
+                    SKIP:  { bg: 'rgba(249,115,22,0.12)', border: 'rgba(249,115,22,0.4)', text: '#f97316', glow: 'rgba(249,115,22,0.3)', emoji: '🟠', cardBorder: 'rgba(249,115,22,0.25)' },
+                    RUN:   { bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)',  text: '#ef4444', glow: 'rgba(239,68,68,0.3)',  emoji: '🔴', cardBorder: 'rgba(239,68,68,0.25)' },
+                };
+                const actionBadge = document.getElementById('verdictActionBadge');
+                const verdictCard = document.getElementById('verdictCard');
+                const verdictGlow = document.getElementById('verdictGlow');
+                const action = (data.verdict_action || '').toUpperCase();
+                const theme = ACTION_THEME[action];
+
+                if (theme && actionBadge) {
+                    actionBadge.textContent = `${theme.emoji} ${action}`;
+                    actionBadge.style.background = theme.bg;
+                    actionBadge.style.borderColor = theme.border;
+                    actionBadge.style.color = theme.text;
+                    actionBadge.classList.remove('hidden');
+                    actionBadge.classList.add('verdict-badge-glow');
+                    // Tint the card border
+                    if (verdictCard) verdictCard.style.background = `linear-gradient(135deg, ${theme.cardBorder} 0%, rgba(255,255,255,0.04) 50%, ${theme.cardBorder} 100%)`;
+                    if (verdictGlow) verdictGlow.style.background = theme.glow;
+                }
+
+                // ── Enhanced Markdown → HTML renderer ─────────────────────
+                // Splits verdict text into structured visual blocks.
+                // Handles both LLM-compliant (\n separated) and wall-of-text output.
+                const renderVerdict = (md) => {
+                    if (!md) return '';
+                    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    let text = esc(String(md).trim());
+
+                    // Bold + Italic
+                    const applyInline = (s) => {
+                        s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                        s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+                        // Highlight metrics: $1.2M, 93.7%, 720x
+                        s = s.replace(/(\$[\d,.]+[KMBkmb]?)/g, '<span class="verdict-metric">$1</span>');
+                        s = s.replace(/([\d,.]+%)/g, '<span class="verdict-metric">$1</span>');
+                        s = s.replace(/([\d,.]+x)\b/g, '<span class="verdict-metric">$1</span>');
+                        return s;
+                    };
+
+                    // Split into lines — use \n if present, otherwise split on ". " sentence boundaries
+                    let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+                    if (lines.length <= 2) {
+                        // LLM didn't use newlines — force-split on sentence boundaries
+                        // Split after ". " but keep the period with the preceding sentence
+                        const raw = lines.join(' ');
+                        lines = [];
+                        // Split on "- " bullets first
+                        const parts = raw.split(/(?=\s*- )/);
+                        for (const part of parts) {
+                            const trimmed = part.trim();
+                            if (!trimmed) continue;
+                            if (trimmed.startsWith('- ')) {
+                                lines.push(trimmed);
+                            } else {
+                                // Split remaining prose on sentence boundaries
+                                // Match: period/exclamation/question followed by space and uppercase or bold marker
+                                const sentences = trimmed.split(/(?<=[.!?])\s+(?=[A-Z*$])/);
+                                lines.push(...sentences.filter(s => s.trim()));
+                            }
+                        }
+                    }
+
+                    // Build HTML blocks
+                    const out = [];
+                    let inList = false;
+                    let isFirst = true;
+
+                    for (const raw of lines) {
+                        const bulletMatch = raw.match(/^\s*-\s+(.*)$/);
+                        if (bulletMatch) {
+                            if (!inList) { out.push('<ul>'); inList = true; }
+                            out.push(`<li>${applyInline(bulletMatch[1])}</li>`);
+                            isFirst = false;
+                        } else {
+                            if (inList) { out.push('</ul>'); inList = false; }
+                            const styled = applyInline(raw);
+                            if (isFirst) {
+                                // First line = headline — render larger
+                                out.push(`<p class="text-[16px] text-white font-semibold mb-1">${styled}</p>`);
+                                isFirst = false;
+                            } else {
+                                out.push(`<p>${styled}</p>`);
+                            }
+                        }
+                    }
+                    if (inList) out.push('</ul>');
+                    return out.join('');
+                };
+
                 if (data.tx_hash) {
-                    verdictEl.innerText = `Payment settled: ${data.tx_hash.substring(0, 12)}... (rendering verdict)`;
+                    verdictEl.innerHTML = '<div class="flex items-center gap-2 text-gray-400 text-sm"><div class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></div>Payment settled, rendering verdict...</div>';
                     setTimeout(() => {
-                        verdictEl.innerText = data.verdict || '';
+                        verdictEl.innerHTML = renderVerdict(data.verdict);
                     }, 400);
                 } else {
-                    verdictEl.innerText = data.verdict || '';
+                    verdictEl.innerHTML = renderVerdict(data.verdict);
                 }
             }
 
@@ -1522,33 +1846,171 @@
                 badge.className = `mt-4 px-4 py-1.5 rounded-full text-sm font-bold tracking-wider uppercase ${riskConfig.bg} ${riskConfig.text} border ${riskConfig.border}`;
             }
 
-            const breakdown = data.breakdown || {};
-            const tc = breakdown.technical?.components || {};
-            document.getElementById('techScoreTotal').innerText = fmtScore((breakdown.technical?.contribution ?? breakdown.technical?.total));
+            // v4.0 breakdown — 3 buckets (Security 40% / Market 35% / Momentum 25%)
+            const v4 = data.breakdown_v4 || {};
+            const sec = v4.security || {};
+            const secC = sec.components || {};
+            const mkt = v4.market || {};
+            const mktC = mkt.components || {};
+            const mom = v4.momentum || {};
+            const momC = mom.components || {};
 
-            document.getElementById('score_momentum').innerText = tc.momentum?.score ?? '--';
-            document.getElementById('score_volume').innerText = tc.volume?.score ?? '--';
-            document.getElementById('score_trade').innerText = tc.trade_pressure?.score ?? '--';
-            document.getElementById('score_liquidity').innerText = tc.liquidity?.score ?? '--';
+            const setText = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
+            const setBar = (id, score) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const pct = Math.max(0, Math.min(100, Number(score) || 0));
+                // Animate after a small delay for visual effect
+                setTimeout(() => { el.style.width = `${pct}%`; }, 100);
+            };
 
-            document.getElementById('onchainScoreTotal').innerText = fmtScore((breakdown.onchain?.contribution ?? breakdown.onchain?.total));
-            const oc = breakdown.onchain?.components || {};
-            document.getElementById('score_holder').innerText = oc.holder?.score ?? '--';
-            document.getElementById('score_security').innerText = oc.security?.score ?? '--';
-            document.getElementById('score_whale').innerText = oc.whale_risk?.score ?? '--';
+            // ── SVG Ring animation helper ──
+            // circumference = 2 * π * 34 ≈ 213.6
+            const CIRC = 213.6;
+            const animateRing = (ringId, scoreVal) => {
+                const ring = document.getElementById(ringId);
+                if (!ring) return;
+                const pct = Math.max(0, Math.min(100, Number(scoreVal) || 0));
+                const offset = CIRC - (CIRC * pct / 100);
+                setTimeout(() => { ring.style.strokeDashoffset = offset; }, 200);
+            };
+
+            // Bucket totals
+            setText('securityScoreTotal', fmtScore(sec.total));
+            setText('marketScoreTotal', fmtScore(mkt.total));
+            setText('momentumScoreTotal', fmtScore(mom.total));
+
+            // Contributions
+            setText('secContrib', sec.contribution != null ? `${Number(sec.contribution).toFixed(1)} pts` : '--');
+            setText('mktContrib', mkt.contribution != null ? `${Number(mkt.contribution).toFixed(1)} pts` : '--');
+            setText('momContrib', mom.contribution != null ? `${Number(mom.contribution).toFixed(1)} pts` : '--');
+
+            // Animate rings
+            animateRing('secRing', sec.total);
+            animateRing('mktRing', mkt.total);
+            animateRing('momRing', mom.total);
+
+            // Security sub-scores + bars
+            const mintScore = secC.mint_authority?.score ?? '--';
+            const freezeScore = secC.freeze_authority?.score ?? '--';
+            const lpScore = secC.lp_locked?.score ?? '--';
+            const insiderScore = secC.insider_clusters?.score ?? '--';
+            setText('score_v4_mint', mintScore);
+            setText('score_v4_freeze', freezeScore);
+            setText('score_v4_lp', lpScore);
+            setText('score_v4_insider', insiderScore);
+            setBar('bar_v4_mint', mintScore);
+            setBar('bar_v4_freeze', freezeScore);
+            setBar('bar_v4_lp', lpScore);
+            setBar('bar_v4_insider', insiderScore);
+
+            // Market sub-scores + bars
+            const liqScore = mktC.liquidity?.score ?? '--';
+            const vmcScore = mktC.volume_mcap_ratio?.score ?? '--';
+            const bsScore = mktC.buy_sell_pressure?.score ?? '--';
+            const t10Score = mktC.top10_holder_pct?.score ?? '--';
+            const washScore = mktC.wash_trade?.score ?? '--';
+            setText('score_v4_liquidity', liqScore);
+            setText('score_v4_volmcap', vmcScore);
+            setText('score_v4_buysell', bsScore);
+            setText('score_v4_top10', t10Score);
+            setText('score_v4_wash', washScore);
+            setBar('bar_v4_liquidity', liqScore);
+            setBar('bar_v4_volmcap', vmcScore);
+            setBar('bar_v4_buysell', bsScore);
+            setBar('bar_v4_top10', t10Score);
+            setBar('bar_v4_wash', washScore);
+
+            // Momentum sub-scores + bars
+            const prScore = momC.price_action?.score ?? '--';
+            const volScore = momC.realized_volatility?.score ?? '--';
+            const vtScore = momC.volume_trend?.score ?? '--';
+            setText('score_v4_price', prScore);
+            setText('score_v4_volatility', volScore);
+            setText('score_v4_voltrend', vtScore);
+            setBar('bar_v4_price', prScore);
+            setBar('bar_v4_volatility', volScore);
+            setBar('bar_v4_voltrend', vtScore);
+
+            // ── v4.0 raw signal overlays (wash / vol / volume-trend) ──
+            // Overwrite sub-score cells with real values when backend returns them;
+            // otherwise leave the YAML-derived scores (50 / 60 fallbacks) in place.
+            if (data.wash_trade_score != null) {
+                const washPct = (Number(data.wash_trade_score) * 100).toFixed(0);
+                setText('score_v4_wash', `${washScore} (${washPct}%)`);
+            }
+            if (data.realized_volatility != null) {
+                setText('score_v4_volatility', `${volScore} (σ=${Number(data.realized_volatility).toFixed(2)})`);
+            }
+            if (data.volume_trend_delta_pct != null) {
+                const vt = Number(data.volume_trend_delta_pct);
+                const sign = vt >= 0 ? '+' : '';
+                setText('score_v4_voltrend', `${vtScore} (${sign}${vt.toFixed(0)}%)`);
+            }
+
+            // ── Rug Score Gauge ──
+            const rs = data.rug_score ?? v4.rug_score;
+            const rsNum = Number(rs);
+            if (rs != null && isFinite(rsNum)) {
+                const rugPct = Math.max(0, Math.min(100, rsNum));
+                // Color the number
+                const rugEl = document.getElementById('rug_score_inline');
+                if (rugEl) {
+                    rugEl.innerText = `${rsNum.toFixed(1)}/100`;
+                    if (rugPct >= 70) rugEl.className = 'text-2xl font-black text-red-400';
+                    else if (rugPct >= 40) rugEl.className = 'text-2xl font-black text-orange-400';
+                    else rugEl.className = 'text-2xl font-black text-emerald-400';
+                }
+                // Gauge mask: width = (100 - rugPct)%
+                const mask = document.getElementById('rugGaugeMask');
+                if (mask) setTimeout(() => { mask.style.width = `${100 - rugPct}%`; }, 300);
+                // Needle position
+                const needle = document.getElementById('rugGaugeNeedle');
+                if (needle) setTimeout(() => { needle.style.marginLeft = `${rugPct}%`; }, 300);
+            } else {
+                setText('rug_score_inline', '--');
+            }
+
+            // Rug breakdown components
+            const rugBd = data.rug_score_breakdown || v4.rug_score_breakdown || {};
+            const fmtRug = (v) => v != null ? Number(v).toFixed(0) : '--';
+            const colorRug = (v) => {
+                const n = Number(v);
+                if (!isFinite(n)) return 'text-gray-400';
+                if (n >= 60) return 'text-red-400';
+                if (n >= 30) return 'text-orange-400';
+                return 'text-emerald-400';
+            };
+            const setRugBd = (id, val) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.innerText = fmtRug(val);
+                el.className = `text-sm font-mono font-bold ${colorRug(val)}`;
+            };
+            setRugBd('rug_bd_authority', rugBd.authority_risk ?? rugBd.authority);
+            setRugBd('rug_bd_holder', rugBd.holder_risk ?? rugBd.holder);
+            setRugBd('rug_bd_lp', rugBd.lp_risk ?? rugBd.lp);
+
+            // Flag counts
+            const redFlags = data.red_flags || [];
+            const greenFlags = data.green_flags || [];
+            const redCountEl = document.getElementById('redFlagCount');
+            const greenCountEl = document.getElementById('greenFlagCount');
+            if (redCountEl) redCountEl.innerText = redFlags.length > 0 ? `${redFlags.length} found` : '';
+            if (greenCountEl) greenCountEl.innerText = greenFlags.length > 0 ? `${greenFlags.length} found` : '';
 
             const redList = document.getElementById('redFlagsList');
             if (redList) {
-                redList.innerHTML = (data.red_flags || []).length ?
-                    (data.red_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="x" class="w-4 h-4 text-red-500 flex-shrink-0"></i> ${f}</li>`).join('') :
-                    `<li class="text-gray-600 italic">${t.noRedFlags}</li>`;
+                redList.innerHTML = redFlags.length ?
+                    redFlags.map(f => `<li class="flex gap-2 items-start"><div class="w-5 h-5 rounded bg-red-500/10 flex items-center justify-center flex-shrink-0 mt-0.5"><i data-lucide="x" class="w-3 h-3 text-red-400"></i></div><span class="text-gray-300">${f}</span></li>`).join('') :
+                    `<li class="text-gray-600 italic text-xs">${t.noRedFlags}</li>`;
             }
 
             const greenList = document.getElementById('greenFlagsList');
             if (greenList) {
-                greenList.innerHTML = (data.green_flags || []).length ?
-                    (data.green_flags || []).map(f => `<li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-primary flex-shrink-0"></i> ${f}</li>`).join('') :
-                    `<li class="text-gray-600 italic">${t.noGreenFlags}</li>`;
+                greenList.innerHTML = greenFlags.length ?
+                    greenFlags.map(f => `<li class="flex gap-2 items-start"><div class="w-5 h-5 rounded bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5"><i data-lucide="check" class="w-3 h-3 text-primary"></i></div><span class="text-gray-300">${f}</span></li>`).join('') :
+                    `<li class="text-gray-600 italic text-xs">${t.noGreenFlags}</li>`;
             }
 
             const ogBtn = document.getElementById('ogVerifyBtn');

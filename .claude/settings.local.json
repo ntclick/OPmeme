@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /f/Work/Cryoto/OP/coincheckgo -type f -name *.mod -o -name *.sum -o -name *.json -o -name *.yaml -o -name *.yml -o -name *.toml)",
+      "Bash(nslookup data-api.pump.fun 1.1.1.1)",
+      "Bash(ping data-api.pump.fun -n 1)",
+      "Bash(./venv/Scripts/python.exe -c \":*)",
+      "Bash(curl -s http://127.0.0.1:8000/api/watching)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/monitor)",
+      "Bash(find f:/Work/Cryoto/OP/coincheckgo -type f -name *pumpfun* -o -name *pump*)",
+      "Bash(grep -E \"\\\\.\\(py|txt\\)$\")",
+      "Bash(./venv/Scripts/pip.exe list:*)",
+      "Bash(timeout 15 ./venv/Scripts/python.exe -c \":*)",
+      "Bash(find f:/Work/Cryoto/OP/coincheckgo -name .env* -type f)",
+      "Bash(python -c \":*)"
+    ]
+  }
+}

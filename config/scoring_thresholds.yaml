@@ -1,0 +1,232 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CoinCheckGo Scoring Thresholds (v4.0)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Extracted from api/routes.py (v3.1 legacy) + analysis/liquidity_analyzer.py
+# + analysis/technical_analyzer.py. Edit this file instead of touching code.
+#
+# Weight model v4.0: Security(40%) + Market(35%) + Momentum(25%)
+# Each bucket below defines tiers (descending) and the score returned when
+# the observed value meets-or-exceeds that tier.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+version: "4.0"
+
+# ─── Component weights (must sum to 1.0 within final blend) ─────────────────
+weights:
+  security: 0.40      # RugCheck-primary (mint + freeze + lp_lock + insider)
+  market: 0.35        # Liquidity + vol/mcap + buy/sell + top10 + wash
+  momentum: 0.25      # Price action + volatility + volume delta
+
+  # Sub-weights inside each bucket
+  security_components:
+    mint_authority_disabled: 0.25
+    freeze_authority_disabled: 0.25
+    lp_locked_or_burned: 0.25
+    no_insider_clusters: 0.25
+
+  market_components:
+    liquidity_tier: 0.286   # 10/35
+    volume_mcap_ratio: 0.229 # 8/35
+    buy_sell_pressure: 0.200 # 7/35
+    top10_holder_pct: 0.143  # 5/35
+    wash_trade_score: 0.143  # 5/35
+
+  momentum_components:
+    price_action_multi_tf: 0.40   # 10/25
+    realized_volatility: 0.32     # 8/25
+    volume_trend_delta: 0.28      # 7/25
+
+# ─── Liquidity tiers (USD) ─────────────────────────────────────────────────
+liquidity:
+  tiers_usd: [5000000, 1000000, 500000, 200000, 100000, 50000, 20000, 10000]
+  scores:    [100, 90, 80, 70, 55, 40, 25, 15]
+  below_min_score: 5
+
+  # Liquidity / MarketCap ratio sub-score
+  mcap_ratio:
+    tiers:  [0.20, 0.10, 0.05, 0.03, 0.01, 0.005]
+    scores: [100, 90, 75, 60, 40, 25]
+    below_min_score: 10
+    unknown_score: 45
+
+  # 24h liquidity change %
+  change_24h:
+    tiers:  [50, 20, 0, -10, -30]
+    scores: [90, 80, 60, 45, 30]
+    below_min_score: 10
+
+  # Sub-component weights inside liquidity_score
+  sub_weights:
+    usd: 0.50
+    mcap_ratio: 0.30
+    change_24h: 0.20
+
+# ─── Volume / Market-cap ratio ──────────────────────────────────────────────
+volume_mcap:
+  # Tiers are descending; first rule that matches wins.
+  # Extreme values (wash trade territory) intentionally score LOW.
+  wash_trade_ceiling: 5.0      # >= → score 15 (manipulation)
+  manipulation_tier: 2.0       # >= → score 30
+  hot_trade_tier: 1.0          # >  → score 45
+  tiers:  [0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
+  scores: [90, 85, 75, 60, 45, 30]
+  below_min_score: 15          # dead volume
+
+# ─── Buy pressure % (of 24h buy volume) ─────────────────────────────────────
+buy_pct:
+  tiers:  [70, 60, 55, 45, 40, 30]
+  scores: [95, 85, 70, 50, 35, 20]
+  below_min_score: 10
+
+# ─── Buy / Sell ratio ───────────────────────────────────────────────────────
+buy_sell_ratio:
+  tiers:  [3.0, 2.0, 1.5, 1.2, 1.0, 0.8, 0.6, 0.4]
+  scores: [95, 90, 80, 70, 55, 45, 30, 20]
+  below_min_score: 10
+
+# ─── Unique traders (24h) ───────────────────────────────────────────────────
+unique_traders:
+  tiers:  [10000, 5000, 2000, 1000, 500, 200, 100]
+  scores: [100, 90, 80, 70, 55, 40, 25]
+  below_min_score: 10
+
+# ─── Holders ────────────────────────────────────────────────────────────────
+holders:
+  count_tiers:  [100000, 50000, 20000, 10000, 5000, 2000, 1000, 500, 100]
+  count_scores: [100, 90, 80, 70, 60, 50, 35, 25, 15]
+  below_min_score: 5
+  unknown_score: 50
+  min_holder_count: 100
+
+  # Top10 whale concentration
+  top10_tiers:  [80, 70, 60, 50, 40, 30, 20]    # thresholds in %
+  top10_scores: [5, 15, 40, 55, 70, 85, 100]    # descending risk → ascending score
+  top10_unknown_score: 50
+  top10_max_safe: 25          # used by LLM prompt reference
+
+# ─── Contract security sub-scores ───────────────────────────────────────────
+security:
+  mint:
+    disabled_score: 100
+    active_score: 0
+  freeze:
+    disabled_score: 100
+    active_score: 20
+  lp_lock:
+    full_burn_pct: 80        # lp_locked_pct >= 80 → full credit
+    burn_score: 100
+    partial_score: 60
+    unlocked_score: 10
+
+  # Token age (hours)
+  age_tiers:  [2160, 720, 336, 168, 72, 24]    # 90d/30d/14d/7d/3d/1d
+  age_scores: [100, 85, 70, 55, 40, 25]
+  age_below_min_score: 10
+  age_unknown_score: 55
+
+  # Sub-weights (v3.1 legacy; used when RugCheck unavailable)
+  legacy_sub_weights:
+    mint: 0.40
+    freeze: 0.25
+    age: 0.35
+
+# ─── Price action (multi-timeframe) ─────────────────────────────────────────
+price_action:
+  # 1h change buckets
+  h1:
+    overbought_threshold: 20      # > 20% → 50 (warning)
+    tiers:  [10, 5, 0, -5, -10]
+    scores: [75, 85, 70, 60, 45]
+    below_min_score: 30
+    overbought_score: 50
+
+  # 24h change buckets
+  h24:
+    extreme_pump_threshold: 100
+    extreme_pump_score: 40
+    tiers:  [50, 20, 5, 0, -5, -10, -20, -50]
+    scores: [55, 85, 90, 70, 60, 50, 40, 30]
+    below_min_score: 20
+
+# ─── Volatility (realized) ──────────────────────────────────────────────────
+volatility:
+  # Annualized vol tiers — lower is safer. Use ASCENDING order with
+  # descending=False in tier_score(): first tier that `value <= t` wins.
+  # Typical crypto: <1.5 stable, 1.5-3 normal, 3-5 volatile, >5 extreme
+  tiers:     [0.3, 0.8, 1.5, 3.0, 5.0]
+  scores:    [95, 85, 60, 35, 15]
+  above_max_score: 5                      # > 5.0 annualized → dangerous
+  insufficient_data_score: 50
+
+# ─── Volume trend delta (24h vs baseline) ───────────────────────────────────
+volume_trend:
+  tiers:  [100, 50, 20, 0, -20, -50]      # 24h change %
+  scores: [90, 80, 70, 60, 45, 30]
+  below_min_score: 15
+
+# ─── Wash trade indicator weights ──────────────────────────────────────────
+wash_detection:
+  # Each component 0-1, blended with these weights.
+  weights:
+    same_wallet_rapid_flip: 0.40   # wallet buy→sell in < window_sec
+    low_unique_ratio: 0.30         # unique/total < threshold
+    volume_concentration: 0.30     # top 1-2 wallets own > share of volume
+  window_sec: 60
+  unique_ratio_threshold: 0.30
+  concentration_threshold: 0.50
+  min_txs_required: 10             # below this → insufficient data → score 0.0
+
+# ─── Override caps (applied AFTER raw weighted sum) ─────────────────────────
+# Note: v3.1 override cap logic preserved for legacy path. v4.0 uses softer
+# caps because RugCheck-driven security already penalises the root causes.
+override_caps:
+  # Classification thresholds
+  established:
+    holders_min: 10000
+    age_hours_min: 720      # 30 days
+  large:
+    liquidity_usd_min: 1000000
+    holders_min: 50000
+
+  # Caps: [new_token_cap, established_cap, large_cap]. Use null to skip.
+  mint_active:            {new: 35, established: 55, large: 70}
+  freeze_active:          {new: 50, established: 50, large: 75}
+  liquidity_under_10k:    {new: 30, established: 50, large: null}
+  liquidity_10k_50k:      {new: 35, established: 45, large: null}
+  liquidity_50k_100k:     {new: 55, established: null, large: null}
+  mcap_under_100k:        {new: 35, established: 45, large: null}
+  mcap_100k_300k:         {new: 55, established: null, large: null}
+  mcap_300k_1m:           {new: 70, established: null, large: null}
+  top10_over_80:          {new: 30, established: 50, large: 65}
+  top10_over_70:          {new: 40, established: 55, large: null}
+  top10_over_60:          {new: 50, established: 65, large: null}
+  largest_over_25:        {new: 30, established: 40, large: null}
+  holders_under_100:      {new: 35, established: 35, large: 35}
+  holders_under_500_new:  {new: 45, established: null, large: null}
+  age_under_24h_small:    {new: 40, established: null, large: null}
+  age_under_24h_growing:  {new: 55, established: null, large: null}
+
+  # v4.0 additional caps (RugCheck-driven)
+  insider_pct_over_30:    {new: 30, established: 45, large: 60}
+  lp_unlocked:            {new: 45, established: 60, large: 75}
+  wash_trade_score_high:  {new: 50, established: 60, large: 75}  # > 0.7
+
+# ─── Rug score composite (0-100, higher = riskier) ─────────────────────────
+rug_score:
+  weights:
+    insider_pct: 0.25
+    lp_unlocked_pct: 0.25         # 100 - lp_locked_pct
+    top10_pct: 0.20
+    sniper_pct: 0.15
+    bundler_pct: 0.10
+    mint_active_penalty: 0.05     # 50 if mint active else 0
+  mint_active_value: 50
+
+# ─── Risk level classification ──────────────────────────────────────────────
+risk_levels:
+  MOON: 80        # >= 80
+  LOW: 65
+  MEDIUM: 50
+  HIGH: 35
+  EXTREME: 20
+  # < 20 → AVOID

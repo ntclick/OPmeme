@@ -259,7 +259,62 @@ class BirdeyeClient:
     async def get_token_creation(self, mint: str) -> Optional[dict]:
         """Get token creation info (Lite+ required)."""
         return await self._request("/defi/token_creation_info", {"address": mint})
-    
+
+    # ════════════════════════════════════════════════════════════════════════
+    # v4.0 ENDPOINTS — wash detection, volatility, deeper market signals
+    # ════════════════════════════════════════════════════════════════════════
+
+    async def get_token_trade_data(self, mint: str) -> Optional[dict]:
+        """
+        v3 single-token trade data (15 CU). Returns separated buy/sell volume,
+        unique wallet counts per timeframe (5m, 30m, 1h, 2h, 4h, 8h, 24h).
+
+        Useful for finer buy-pressure and unique-trader trends than overview.
+        """
+        return await self._request(
+            "/defi/v3/token/trade-data/single",
+            {"address": mint},
+        )
+
+    async def get_pair_overview(self, pair_address: str) -> Optional[dict]:
+        """
+        v3 pair overview (20 CU). Feed it a pair/pool address (not token mint)
+        to get pool-level liquidity depth, 24h pool volume, base/quote metrics.
+        """
+        return await self._request(
+            "/defi/v3/pair/overview/single",
+            {"address": pair_address},
+        )
+
+    async def get_token_txs(
+        self,
+        mint: str,
+        limit: int = 50,
+        offset: int = 0,
+        tx_type: str = "swap",
+        sort_type: str = "desc",
+    ) -> Optional[list]:
+        """
+        Recent transactions for a token (10 CU). Default 50 most recent swaps.
+        Feed the result into `analysis.wash_detector.detect_wash_trade_score()`.
+        """
+        data = await self._request(
+            "/defi/txs/token",
+            {
+                "address": mint,
+                "offset": offset,
+                "limit": min(limit, 50),
+                "tx_type": tx_type,
+                "sort_type": sort_type,
+            },
+        )
+        if not data:
+            return None
+        # Birdeye returns either a plain list or {"items": [...]} — normalise
+        if isinstance(data, list):
+            return data
+        return data.get("items") if isinstance(data, dict) else None
+
     # ════════════════════════════════════════════════════════════════════════
     # CONVENIENCE METHODS
     # ════════════════════════════════════════════════════════════════════════

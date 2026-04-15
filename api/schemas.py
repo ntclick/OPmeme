@@ -114,7 +114,8 @@ class AnalyzeResponse(BaseModel):
 
     # Score breakdowns
     scores: ScoreBreakdown
-    breakdown: Optional[dict[str, Any]] = None  # Extended breakdown
+    breakdown: Optional[dict[str, Any]] = None  # Extended breakdown (v3.1 shape — kept for existing UI)
+    breakdown_v4: Optional[dict[str, Any]] = None  # v4.0 Security/Market/Momentum shape
 
     market_data: Optional[dict[str, Any]] = None
     
@@ -124,8 +125,22 @@ class AnalyzeResponse(BaseModel):
     
     # Verdict & Flags
     verdict: str
+    verdict_action: Optional[str] = None  # APE | WATCH | SKIP | RUN (from LLM)
     red_flags: list[str] = Field(default_factory=list)
     green_flags: list[str] = Field(default_factory=list)
+
+    # v4.0 — independent rug index (higher = riskier)
+    rug_score: Optional[float] = None
+    rug_score_breakdown: Optional[dict[str, Any]] = None
+
+    # v4.0 — wash trading / volatility / cross-validation signals
+    wash_trade_score: Optional[float] = None      # 0-1, higher = more wash-like
+    wash_trade_breakdown: Optional[dict[str, Any]] = None
+    realized_volatility: Optional[float] = None   # annualised
+    volume_trend_delta_pct: Optional[float] = None
+    confidence_score: Optional[str] = None         # "high" | "medium" | "low"
+    conflicting_signals: Optional[bool] = None
+    cross_validation: Optional[dict[str, Any]] = None
 
     # Verification
     tx_hash: Optional[str] = None

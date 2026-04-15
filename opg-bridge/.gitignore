@@ -1,0 +1,23 @@
+# node
+node_modules/
+.next/
+out/
+dist/
+
+# hardhat
+contracts/cache/
+contracts/artifacts/
+contracts/typechain-types/
+
+# env
+.env
+.env.local
+**/.env
+**/.env.local
+
+# relayer state
+relayer/data/state.json
+
+# misc
+.DS_Store
+*.log
