@@ -1547,7 +1547,12 @@ async def analyze_coin_stream(request: AnalyzeRequest, db: Session = Depends(get
 
         yield "event: open\ndata: {}\n\n"
         while True:
-            event_name, data = await queue.get()
+            # Send heartbeat every 10s to keep Railway proxy alive (default 30s timeout)
+            try:
+                event_name, data = await asyncio.wait_for(queue.get(), timeout=10.0)
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+                continue
             yield f"event: {event_name}\n" + f"data: {json.dumps(data)}\n\n"
             if event_name == "done":
                 break
